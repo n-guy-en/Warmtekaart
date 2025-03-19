@@ -8,7 +8,8 @@ import h3
 @st.cache_data
 def load_data():
     # file_path = "data_KJ - kopie.csv"
-    file_id = "1VDo2SGNtrtZR32XjAWQI4uKBa8zm9nxA"
+    # file_id = "1VDo2SGNtrtZR32XjAWQI4uKBa8zm9nxA"
+    file_id = "1HAXE90xiqEShkCRhG92q_BC5Ie-wBfTh"
     url = f"https://drive.google.com/uc?export=download&id={file_id}"
 
     output = "data_kWh.csv"
@@ -114,8 +115,8 @@ with st.sidebar.expander("ℹ Uitleg over zoomniveau"):
 # Unieke woonplaatsen ophalen
 woonplaatsen = df["woonplaats"].dropna().unique()
 
-# Bij zoomniveau 1-7: automatisch alle woonplaatsen in Friesland selecteren
-if 1 <= zoom_level <= 7:
+# Bij zoomniveau 1-10: automatisch alle woonplaatsen in Friesland selecteren
+if 1 <= zoom_level <= 10:
     # Alle woonplaatsen in Friesland
     friesland_woonplaatsen = df["woonplaats"].unique()
     df = df[df["woonplaats"].isin(friesland_woonplaatsen)]
