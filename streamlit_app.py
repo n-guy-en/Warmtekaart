@@ -270,7 +270,7 @@ if st.session_state.show_map:
 
     # Groeperen per H3-index: gemiddeld energieverbruik en oppervlakte berekenen
     df_filtered = df_filtered.groupby("h3_index").agg({
-        "kWh_per_m2": "mean",  # Gemiddelde energieverbruik per hexagon
+        "kWh_per_m2": "sum",  # Sum energieverbruik per hexagon
         "oppervlakte": "mean",  # Totale oppervlakte per hexagon
         "h3_index": "count" # Aantal huizen in de hexagoon
     }).rename(columns={"h3_index": "aantal_huizen"}).reset_index()
@@ -393,7 +393,7 @@ if st.session_state.show_map:
             <b>Aantal objecten:</b> {aantal_huizen}<br>
             <b>Huisnummer:</b> {huisnummer}<br>
             <b>Huisletter:</b> {huisletter}<br>
-            <b>Totaal opgetelde Energiegebruik:</b> {kWh_per_m2} kWh/m²<br>
+            <b>Som Energiegebruik:</b> {kWh_per_m2} kWh/m²<br>
             <b>Oppervlakte:</b> {oppervlakte} m²<br>
             <b>Energieklasse:</b> {Energieklasse} <br>
             <b>Energiebehoefte:</b> {Energiebehoefte} <br>
