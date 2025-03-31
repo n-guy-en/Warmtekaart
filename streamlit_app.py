@@ -47,13 +47,13 @@ def get_dynamic_line_width(zoom_level):
 
 # *** Kleurmapping ***
 colorbrewer_colors = [
-    [215, 48, 39, 255], # Rood (Geen potentie)
-    [252, 141, 89, 255], # Oranje (Lage potentie)
-    [254, 224, 129, 255], # Geel (Matige potentie)
-    [255, 255, 191, 255], # Lichtgeel (Redelijke potentie)
-    [217, 239, 139, 255], # Lichtgroen (Goede potentie)
-    [145, 207, 96, 255], # Groen (Hoge potentie)
-    [26, 152, 80, 255] # Donkergroen (Zeer hoge potentie)
+    [69, 117, 180, 255], # Donkerblauw (Geen potentie)
+    [145, 191, 219, 255], # Blauw (Lage potentie)
+    [224, 243, 248, 255], # Lichtblauw (Matige potentie)
+    [255, 255, 191, 255], # Geel (Redelijke potentie)
+    [254, 224, 144, 255], # Lichtoranje (Goede potentie)
+    [252, 141, 89, 255], # Oranje (Hoge potentie)
+    [215, 48, 39, 255] # Rood (Zeer hoge potentie)
 ]
 
 def get_color(kJ_value):
@@ -326,7 +326,7 @@ if st.session_state.show_map:
             filled=True,
             extruded=extruded,
             get_hexagon="h3_index",
-            get_fill_color=[64, 64, 64],
+            get_fill_color=[26, 152, 80],
             get_line_color=[0, 0, 0],
             get_line_width=10,
             visible=True
@@ -438,42 +438,42 @@ if st.session_state.show_map:
     )
 
     # *Legenda*
-    legend_html = """
-        <style>
-            .legend {
-                position: absolute;
-                bottom: 10px;
-                left: 10px;
-                width: 220px;
-                background: white;
-                padding: 10px;
-                border-radius: 5px;
-                font-family: Arial, sans-serif;
-                font-size: 12px;
-                color: black;
-                box-shadow: 2px 2px 5px rgba(0,0,0,0.3);
-            }
-            .legend-title {
-                font-weight: bold;
-                margin-bottom: 5px;
-            }
-            .color-box {
-                width: 15px;
-                height: 15px;
-                display: inline-block;
-                margin-right: 5px;
-            }
-        </style>
-        <div class="legend">
-            <div class="legend-title">Warmtepotentieel (kWh/m²)</div>
-            <div><span class="color-box" style="background-color: #d73027;"></span> &lt; 15,0 </div>
-            <div><span class="color-box" style="background-color: #fc8d59;"></span> 15,0 - 40,0 </div>
-            <div><span class="color-box" style="background-color: #fee08b;"></span> 40,0 - 80,0 </div>
-            <div><span class="color-box" style="background-color: #ffffbf;"></span> 80,0 - 140,0 </div>
-            <div><span class="color-box" style="background-color: #d9ef8b;"></span> 140,0 - 280,0 </div>
-            <div><span class="color-box" style="background-color: #91cf60;"></span> 280,0 - 800,0 </div>
-            <div><span class="color-box" style="background-color: #1a9850;"></span> &gt; 800,0 </div>
-        </div>
-    """
-    st.markdown(legend_html, unsafe_allow_html=True)
-
+    legend_html = f"""
+    <style>
+        .legend {{
+            position: absolute;
+            bottom: 10px;
+            left: 10px;
+            width: 220px;
+            background: white;
+            padding: 10px;
+            border-radius: 5px;
+            font-family: Arial, sans-serif;
+            font-size: 12px;
+            color: black;
+            box-shadow: 2px 2px 5px rgba(0,0,0,0.3);
+        }}
+        .legend-title {{
+            font-weight: bold;
+            margin-bottom: 5px;
+        }}
+        .color-box {{
+            width: 15px;
+            height: 15px;
+            display: inline-block;
+            margin-right: 5px;
+        }}
+    </style>
+    <div class="legend">
+        <div class="legend-title">Warmtepotentieel (kWh/m²)</div>
+        <div><span class="color-box" style="background-color: #4575b4;"></span> &lt; 15,0 </div>
+        <div><span class="color-box" style="background-color: #91bfdb;"></span> 15,0 - 40,0 </div>
+        <div><span class="color-box" style="background-color: #e0f3f8;"></span> 40,0 - 80,0 </div>
+        <div><span class="color-box" style="background-color: #ffffbf;"></span> 80,0 - 140,0 </div>
+        <div><span class="color-box" style="background-color: #fee090;"></span> 140,0 - 280,0 </div>
+        <div><span class="color-box" style="background-color: #fc8d59;"></span> 280,0 - 800,0 </div>
+        <div><span class="color-box" style="background-color: #d73027;"></span> &gt; 800,0 </div>
+        <div><span class="color-box" style="background-color: #1a9850;"></span> Potentie grenswaarde: {grenswaarde} </div>
+    </div>
+"""
+st.markdown(legend_html, unsafe_allow_html=True)
