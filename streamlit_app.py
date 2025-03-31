@@ -20,11 +20,13 @@ def load_data():
     return df
 
 df = load_data()
+
 # Alleen relevante kolommen inladen
 df = df[["kWh_per_m2", "oppervlakte", "woonplaats", "Energieklasse", "huisnummer", "huisletter", "postcode", 
          "openbare_ruimte", "latitude", "longitude", "bouwjaar", "Energiebehoefte", "AandeelHernieuwbareEnergie",
-         "Warmtebehoefte", "BerekendeCO2Emissie", "BerekendeEnergieverbruik", "PrimaireFossieleEnergie"]]
+         "Warmtebehoefte", "BerekendeCO2Emissie", "BerekendeEnergieverbruik", "PrimaireFossieleEnergie", "pandstatus"]]
 
+df = df[df["pandstatus"] == "Pand in gebruik"]
 
 #%%
 # *** Dynamische H3-resolutie bepalen op basis van zoomniveau ***
@@ -63,7 +65,6 @@ def get_color(kJ_value):
 
 df["color"] = df["kWh_per_m2"].apply(get_color)
 
-
 # *** Berekening H3 hexagoon in km ***
 # Functie om de hexagon grootte te bepalen
 def get_hexagon_size(zoom_level):
@@ -93,7 +94,7 @@ map_style = st.sidebar.selectbox(
 map_style_url = f"mapbox://styles/mapbox/{map_style}-v9"
 
 # *** Zoom slider ***
-zoom_level = st.sidebar.slider("Selecteer zoomniveau", 1, 15, 7)
+zoom_level = st.sidebar.slider("Selecteer zoomniveau", 7, 12, 10)
 resolution = get_dynamic_resolution(zoom_level)
 hexagon_size = get_hexagon_size(zoom_level)
 
@@ -110,6 +111,14 @@ with st.sidebar.expander("ℹ Uitleg over zoomniveau"):
         "Bij lagere zoomniveaus (1 tot 7) wordt slechts een deel van de data weergegeven om de prestaties te verbeteren.\n\n"
         "Deze zoomniveaus zijn gebaseerd op de documentatie van [Mapbox](https://docs.mapbox.com/help/glossary/zoom-level/)."
     )
+
+# *** Grenswaarde voor kWh_per_m2 (indicatieve aandachtsgebieden) ***
+grenswaarde = st.sidebar.number_input(
+    "Stel de minimale grenswaarde in (indicatieve aandachtsgebieden (kWh/m²)):",
+    min_value=0,
+    value=1400,  # Standaard waarde
+    step=1
+)
 
 # *** Woonplaatsen ***
 # Unieke woonplaatsen ophalen
@@ -154,6 +163,20 @@ if not energieklasse_selectie:
 # Data filteren op geselecteerde energieklassen
 df = df[df["Energieklasse"].isin(energieklasse_selectie)]
 
+# *** Bouwjaar ***
+# Dynamically get the min and max year from the dataset
+min_year = int(df["bouwjaar"].min())
+max_year = int(df["bouwjaar"].max())
+
+# Create a slider in the sidebar for users to filter by bouwjaar
+bouwjaar_range = st.sidebar.slider(
+    "Filter op bouwjaar:", 
+    min_year, max_year, (min_year, max_year)
+)
+
+# Apply filter based on bouwjaar range
+df = df[(df["bouwjaar"] >= bouwjaar_range[0]) & (df["bouwjaar"] <= bouwjaar_range[1])]
+
 # *** Scenario selectie ***
 multiplier = st.sidebar.selectbox(
     "Selecteer een scenario:",
@@ -195,7 +218,8 @@ if "prev_filters" not in st.session_state:
         "zoom_level": zoom_level,
         "scenario": multiplier,
         "woonplaats": woonplaats_selectie,
-        "Energieklasse": energieklasse_selectie
+        "Energieklasse": energieklasse_selectie,
+        "threshold": grenswaarde
     }
 
 # **Waarschuwingslogica en uitzetten van de kaart direct bij wijzigingen in de filters**
@@ -285,7 +309,28 @@ if st.session_state.show_map:
                     "Warmtebehoefte",
                     "BerekendeCO2Emissie",
                     "BerekendeEnergieverbruik",
-                    "PrimaireFossieleEnergie"]]
+                    "PrimaireFossieleEnergie"
+                    ]]
+    
+    # *** Filter op basis van grenswaarde ***
+    # Voeg een nieuwe kolom toe die aanduidt of een hexagoon boven de grenswaarde ligt
+    df_filtered_area = df_filtered.copy()
+    df_filtered_area["indicatief_aandachtsgebied"] = df_filtered_area["kWh_per_m2"] > grenswaarde
+
+    # Laag voor indicatieve aandachtsgebieden
+    def create_indicative_area_layer():
+        return pdk.Layer(
+            "H3HexagonLayer",
+            df_filtered_area[df_filtered_area["indicatief_aandachtsgebied"] == True],
+            pickable=True,
+            filled=True,
+            extruded=extruded,
+            get_hexagon="h3_index",
+            get_fill_color=[64, 64, 64],
+            get_line_color=[0, 0, 0],
+            get_line_width=10,
+            visible=True
+        )
 
     # Functie om de H3 laag aan te maken
     def create_layer(visible, elevation_scale):
@@ -320,6 +365,7 @@ if st.session_state.show_map:
     
     # Maak de lagen dynamisch afhankelijk van het zoomniveau
     layers = create_layers(df_filtered, zoom_level, extruded)
+    layers.append(create_indicative_area_layer())
 
     # *ViewState correct bijwerken*
     # Pas de zoomniveau aan zoals aangegeven
@@ -339,7 +385,7 @@ if st.session_state.show_map:
     )
 
     # *Tooltip op de kaart*
-    if zoom_level >= 15:
+    if zoom_level >= 11:
         tooltip_html = """
             <b>Postcode:</b> {postcode}<br>
             <b>Woonplaats:</b> {woonplaats}<br>
@@ -347,7 +393,7 @@ if st.session_state.show_map:
             <b>Aantal objecten:</b> {aantal_huizen}<br>
             <b>Huisnummer:</b> {huisnummer}<br>
             <b>Huisletter:</b> {huisletter}<br>
-            <b>Energiegebruik:</b> {kWh_per_m2} kWh/m²<br>
+            <b>Totaal opgetelde Energiegebruik:</b> {kWh_per_m2} kWh/m²<br>
             <b>Oppervlakte:</b> {oppervlakte} m²<br>
             <b>Energieklasse:</b> {Energieklasse} <br>
             <b>Energiebehoefte:</b> {Energiebehoefte} <br>
@@ -355,13 +401,13 @@ if st.session_state.show_map:
             <b>Warmtebehoefte:</b> {Warmtebehoefte} <br>
             <b>Berekende CO2 Emissie:</b> {BerekendeCO2Emissie} <br>
             <b>Berekende Energieverbruik:</b> {BerekendeEnergieverbruik} <br>
-            <b>PrimaireFossieleEnergie:</b> {PrimaireFossieleEnergie} <br>
+            <b>Primaire Fossiele Energie:</b> {PrimaireFossieleEnergie} <br>
             <b>Bouwjaar:</b> {bouwjaar} <br>
         """
     else:
         tooltip_html = """
             <b>Aantal objecten:</b> {aantal_huizen}<br>
-            <b>Energiegebruik:</b> {kWh_per_m2} kWh/m²<br>
+            <b>Totaal opgetelde Energiegebruik:</b> {kWh_per_m2} kWh/m²<br>
             <b>Oppervlakte:</b> {oppervlakte} m²<br>
             <b>Energiebehoefte:</b> {Energiebehoefte} <br>
             <b>Aandeel Hernieuwbare Energie:</b> {AandeelHernieuwbareEnergie} <br>
@@ -430,3 +476,4 @@ if st.session_state.show_map:
         </div>
     """
     st.markdown(legend_html, unsafe_allow_html=True)
+
