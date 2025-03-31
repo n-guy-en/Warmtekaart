@@ -439,41 +439,41 @@ if st.session_state.show_map:
 
     # *Legenda*
     legend_html = f"""
-    <style>
-        .legend {{
-            position: absolute;
-            bottom: 10px;
-            left: 10px;
-            width: 220px;
-            background: white;
-            padding: 10px;
-            border-radius: 5px;
-            font-family: Arial, sans-serif;
-            font-size: 12px;
-            color: black;
-            box-shadow: 2px 2px 5px rgba(0,0,0,0.3);
-        }}
-        .legend-title {{
-            font-weight: bold;
-            margin-bottom: 5px;
-        }}
-        .color-box {{
-            width: 15px;
-            height: 15px;
-            display: inline-block;
-            margin-right: 5px;
-        }}
-    </style>
-    <div class="legend">
-        <div class="legend-title">Warmtepotentieel (kWh/m²)</div>
-        <div><span class="color-box" style="background-color: #4575b4;"></span> &lt; 15,0 </div>
-        <div><span class="color-box" style="background-color: #91bfdb;"></span> 15,0 - 40,0 </div>
-        <div><span class="color-box" style="background-color: #e0f3f8;"></span> 40,0 - 80,0 </div>
-        <div><span class="color-box" style="background-color: #ffffbf;"></span> 80,0 - 140,0 </div>
-        <div><span class="color-box" style="background-color: #fee090;"></span> 140,0 - 280,0 </div>
-        <div><span class="color-box" style="background-color: #fc8d59;"></span> 280,0 - 800,0 </div>
-        <div><span class="color-box" style="background-color: #d73027;"></span> &gt; 800,0 </div>
-        <div><span class="color-box" style="background-color: #1a9850;"></span> Potentie grenswaarde: {grenswaarde} </div>
-    </div>
-"""
-st.markdown(legend_html, unsafe_allow_html=True)
+        <style>
+            .legend {{
+                position: absolute;
+                bottom: 10px;
+                left: 10px;
+                width: 220px;
+                background: white;
+                padding: 10px;
+                border-radius: 5px;
+                font-family: Arial, sans-serif;
+                font-size: 12px;
+                color: black;
+                box-shadow: 2px 2px 5px rgba(0,0,0,0.3);
+            }}
+            .legend-title {{
+                font-weight: bold;
+                margin-bottom: 5px;
+            }}
+            .color-box {{
+                width: 15px;
+                height: 15px;
+                display: inline-block;
+                margin-right: 5px;
+            }}
+        </style>
+        <div class="legend">
+            <div class="legend-title">Warmtepotentieel (kWh/m²)</div>
+            <div><span class="color-box" style="background-color: #4575b4;"></span> &lt; 15,0 </div>
+            <div><span class="color-box" style="background-color: #91bfdb;"></span> 15,0 - 40,0 </div>
+            <div><span class="color-box" style="background-color: #e0f3f8;"></span> 40,0 - 80,0 </div>
+            <div><span class="color-box" style="background-color: #ffffbf;"></span> 80,0 - 140,0 </div>
+            <div><span class="color-box" style="background-color: #fee090;"></span> 140,0 - 280,0 </div>
+            <div><span class="color-box" style="background-color: #fc8d59;"></span> 280,0 - 800,0 </div>
+            <div><span class="color-box" style="background-color: #d73027;"></span> &gt; 800,0 </div>
+            <div><span class="color-box" style="background-color: #1a9850;"></span> Potentie grenswaarde: {grenswaarde} </div>
+        </div>
+    """
+    st.markdown(legend_html, unsafe_allow_html=True)
