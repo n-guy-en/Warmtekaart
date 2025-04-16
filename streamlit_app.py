@@ -21,6 +21,16 @@ def load_data():
 
 df = load_data()
 
+# Manual formatter
+def format_dutch_number(num, decimals=2):
+    if isinstance(num, int):
+        return f"{num:,}".replace(",", ".")
+    return f"{num:,.{decimals}f}".replace(",", "X").replace(".", ",").replace("X", ".")
+
+def show_dutch_metric(value):
+    formatted = format_dutch_number(value)
+    st.metric(formatted)
+
 # Alleen relevante kolommen inladen
 df = df[["kWh_per_m2", "oppervlakte", "woonplaats", "Energieklasse", "huisnummer", "huisletter", "postcode", 
          "openbare_ruimte", "latitude", "longitude", "bouwjaar", "Energiebehoefte", "AandeelHernieuwbareEnergie",
@@ -246,8 +256,8 @@ if st.session_state.show_map:
     }).rename(columns={"h3_index": "aantal_huizen"}).reset_index()
 
     # Rond de gemiddelde waarde af op 1 decimaal
-    df_filtered["kWh_per_m2"] = df_filtered["kWh_per_m2"].round(1)
-    df_filtered["oppervlakte"] = df_filtered["oppervlakte"].round(1)
+    df_filtered["kWh_per_m2"] = df_filtered["kWh_per_m2"].round(0)
+    df_filtered["oppervlakte"] = df_filtered["oppervlakte"].round(0)
     df_filtered["bouwjaar"] = df_filtered["bouwjaar"].round(0)
 
     # Nieuwe kleur bepalen op basis van het gemiddelde energieverbruik
@@ -255,7 +265,7 @@ if st.session_state.show_map:
 
     # Schaalvergroting aanpassen
     MAX_HEIGHT = 3500
-    df_filtered["scaled_elevation"] = (df_filtered["kWh_per_m2"] - 15) / (800 - 15) * MAX_HEIGHT
+    df_filtered["scaled_elevation"] = (df_filtered["kWh_per_m2"] - 10) / (50 - 10) * MAX_HEIGHT
     df_filtered["scaled_elevation"] = df_filtered["scaled_elevation"].clip(lower=0, upper=MAX_HEIGHT)
 
     # Merge extra info terug
@@ -391,9 +401,11 @@ if st.session_state.show_map:
     # *Tegels*
     # Aantal huizen berekenen
     totaal_aantal_huizen = df_filtered["aantal_huizen"].sum()
+    totaal_aantal_huizen = format_dutch_number(totaal_aantal_huizen, decimals=0)
 
     # Totale heat demand berekenen
-    totaal_heat_demand = df_filtered["kWh_per_m2"].sum()
+    totaal_heat_demand = df_filtered["kWh_per_m2"].mean()
+    totaal_heat_demand = format_dutch_number(totaal_heat_demand, decimals=0)
 
     # CSS voor de tegel
     st.markdown("""
@@ -436,12 +448,12 @@ if st.session_state.show_map:
     st.markdown(f"""
         <div class="tile-container">
             <div class="tile">
-                <h2>{totaal_aantal_huizen:,}</h2>
-                <p>Aantal huizen</p>
+                <h2>{totaal_aantal_huizen}</h2>
+                <p>Aantal panden</p>
             </div>
             <div class="tile">
-                <h2>{totaal_heat_demand:.1f} kWh/m²</h2>
-                <p>Gemiddeld verbruik</p>
+                <h2>{totaal_heat_demand} kWh/m²</h2>
+                <p>Totale Head Demand</p>
             </div>
         </div>
     """, unsafe_allow_html=True)
