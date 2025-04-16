@@ -38,9 +38,9 @@ def get_dynamic_line_width(zoom_level):
         return 0  # Verwijder de lijn bij hogere zoomniveaus
     elif 12 <= zoom_level <= 14:
         return 0.5
-    elif 10 <= zoom_level < 12:
-        return 10
-    elif 7 <= zoom_level < 10:
+    elif 8 <= zoom_level < 12:
+        return 8.5
+    elif 7 <= zoom_level < 8:
         return 20
     else:
         return 50
@@ -48,18 +48,14 @@ def get_dynamic_line_width(zoom_level):
 # *** Kleurmapping ***
 colorbrewer_colors = [
     [69, 117, 180, 255], # Donkerblauw (Geen potentie)
-    [145, 191, 219, 255], # Blauw (Lage potentie)
-    [224, 243, 248, 255], # Lichtblauw (Matige potentie)
-    [255, 255, 191, 255], # Geel (Redelijke potentie)
     [254, 224, 144, 255], # Lichtoranje (Goede potentie)
-    [252, 141, 89, 255], # Oranje (Hoge potentie)
     [215, 48, 39, 255] # Rood (Zeer hoge potentie)
 ]
 
-def get_color(kJ_value):
-    bins = [15, 40, 80, 140, 280, 800]
+def get_color(value):
+    bins = [10, 50]
     for i, threshold in enumerate(bins):
-        if kJ_value < threshold:
+        if value < threshold:
             return colorbrewer_colors[i]
     return colorbrewer_colors[-1]  # For values >= 50
 
@@ -72,7 +68,7 @@ def get_hexagon_size(zoom_level):
         1: 5000, 2: 2500, 3: 1500, 4: 700, 5: 350, 6: 175, 7: 90,
         8: 35, 9: 17, 10: 8, 11: 4, 12: 2, 13: 1, 14: 0.5, 15: 0.2
     }
-    return hexagon_sizes.get(zoom_level, 90)  # Default naar zoomniveau 7
+    return hexagon_sizes.get(zoom_level, 8)  # Default naar zoomniveau 10
 
 # *** Streamlit UI ***
 st.markdown('<h1 style="font-size: 35px;">Friese Warmtevraagkaart (Heat Demand)</h1>', unsafe_allow_html=True)
@@ -94,7 +90,7 @@ map_style = st.sidebar.selectbox(
 map_style_url = f"mapbox://styles/mapbox/{map_style}-v9"
 
 # *** Zoom slider ***
-zoom_level = st.sidebar.slider("Selecteer zoomniveau", 7, 12, 10)
+zoom_level = st.sidebar.slider("Selecteer zoomniveau", 9, 12, 10)
 resolution = get_dynamic_resolution(zoom_level)
 hexagon_size = get_hexagon_size(zoom_level)
 
@@ -104,21 +100,10 @@ st.sidebar.markdown(f'<span style="font-size: smaller;">📍 Bij <b>zoomniveau {
 with st.sidebar.expander("ℹ Uitleg over zoomniveau"):
     st.write(
         "Het zoomniveau bepaalt de mate van detail op de kaart:\n"
-        "- **1-3 (~1500 km - 5000 km)**: Wereld- en landniveau, waarbij hele continenten of landen zichtbaar zijn. Om de prestaties te optimaliseren, wordt 5% van de gegevens weergegeven.\n"
-        "- **4-7 (~70 km - 700 km)**: Grote steden en regio’s komen in beeld. In deze weergave wordt 20% van de gegevens geladen.\n"
-        "- **8-11 (~4 km - 35 km)**: Specifieke buurten en industriegebieden zijn herkenbaar. Vanaf dit niveau kan de volledige dataset worden gefilterd op woonplaats.\n"
-        "- **12-15 (~200 m - 2 km)**: Straatniveau, waarbij ook de volledige dataset beschikbaar is gefilterd op woonplaats. Individuele panden en straten zijn gedetailleerd zichtbaar.\n\n"
-        "Bij lagere zoomniveaus (1 tot 7) wordt slechts een deel van de data weergegeven om de prestaties te verbeteren.\n\n"
+        "- **9 en 10**: Specifieke buurten en industriegebieden zijn herkenbaar voor heel Friesland. \n"
+        "- **11 en 12**: Straatniveau. Vanaf dit niveau kan de volledige dataset worden gefilterd op woonplaats. \n\n"
         "Deze zoomniveaus zijn gebaseerd op de documentatie van [Mapbox](https://docs.mapbox.com/help/glossary/zoom-level/)."
     )
-
-# *** Grenswaarde voor kWh_per_m2 (indicatieve aandachtsgebieden) ***
-grenswaarde = st.sidebar.number_input(
-    "Stel de minimale grenswaarde in (indicatieve aandachtsgebieden (kWh/m²)):",
-    min_value=0,
-    value=1400,  # Standaard waarde
-    step=1
-)
 
 # *** Woonplaatsen ***
 # Unieke woonplaatsen ophalen
@@ -145,6 +130,14 @@ else:
         woonplaats_selectie = ["Leeuwarden"] 
 
 df = df[df["woonplaats"].isin(woonplaats_selectie)]
+
+# *** Grenswaarde voor kWh_per_m2 (indicatieve aandachtsgebieden) ***
+grenswaarde = st.sidebar.number_input(
+    "Stel de minimale grenswaarde (threshold) in per kWh/m²:",
+    min_value=0,
+    value=100,  # Standaard waarde
+    step=1
+)
 
 # *** Energieklasse ***
 df["Energieklasse"] = df["Energieklasse"].fillna("Onbekend")  # Vervang NaN door 'Onbekend'
@@ -177,27 +170,6 @@ bouwjaar_range = st.sidebar.slider(
 # Apply filter based on bouwjaar range
 df = df[(df["bouwjaar"] >= bouwjaar_range[0]) & (df["bouwjaar"] <= bouwjaar_range[1])]
 
-# *** Scenario selectie ***
-multiplier = st.sidebar.selectbox(
-    "Selecteer een scenario:",
-    options=["Scenario 1", "Scenario 2", "Scenario 3", "Scenario 4"],
-    index=0
-)
-
-scenario_mapping = {"Scenario 1": 1, "Scenario 2": 2, "Scenario 3": 3, "Scenario 4": 4}
-multiplier = scenario_mapping[multiplier]
-
-# Uitleg over scenario's
-with st.sidebar.expander("ℹ Uitleg over scenario’s"):
-    st.write(
-        "De scenario’s bepalen hoe sterk de 3D-weergave de warmtebehoefte vergroot:\n\n"
-        "- **Scenario 1:** Standaard hoogte, direct gebaseerd op warmtebehoefte.\n"
-        "- **Scenario 2:** Verdubbelt de hoogte voor beter zichtbare patronen.\n"
-        "- **Scenario 3:** Extra versterkt om energiehotspots uit te lichten.\n"
-        "- **Scenario 4:** Maximale versterking voor de grootste contrasten.\n\n"
-        "Hogere scenario’s helpen om verschillen beter te analyseren!"
-    )
-
 # *** 2D/3D-weergave ***
 extruded = st.sidebar.toggle("3D Weergave", value=False)
 
@@ -216,7 +188,6 @@ if "show_map" not in st.session_state:
 if "prev_filters" not in st.session_state:
     st.session_state.prev_filters = {
         "zoom_level": zoom_level,
-        "scenario": multiplier,
         "woonplaats": woonplaats_selectie,
         "Energieklasse": energieklasse_selectie,
         "threshold": grenswaarde
@@ -225,7 +196,6 @@ if "prev_filters" not in st.session_state:
 # **Waarschuwingslogica en uitzetten van de kaart direct bij wijzigingen in de filters**
 filters_changed = (
     zoom_level != st.session_state.prev_filters["zoom_level"] or
-    multiplier != st.session_state.prev_filters["scenario"] or
     woonplaats_selectie != st.session_state.prev_filters["woonplaats"] or
     energieklasse_selectie != st.session_state.prev_filters["Energieklasse"]
 )
@@ -236,7 +206,6 @@ if filters_changed:
     # Sla de huidige filters op
     st.session_state.prev_filters = {
         "zoom_level": zoom_level,
-        "scenario": multiplier,
         "woonplaats": woonplaats_selectie,
         "Energieklasse": energieklasse_selectie
     }
@@ -265,19 +234,21 @@ if st.session_state.show_map:
 
     # Opslaan van extra info voordat je groepeert
     df_extra_info = df_filtered[["h3_index", "woonplaats", "postcode", "openbare_ruimte", "huisnummer", "huisletter", 
-                        "bouwjaar", "Energieklasse", "Energiebehoefte", "AandeelHernieuwbareEnergie",
+                        "Energieklasse", "Energiebehoefte", "AandeelHernieuwbareEnergie",
                         "Warmtebehoefte", "BerekendeCO2Emissie", "BerekendeEnergieverbruik", "PrimaireFossieleEnergie"]].drop_duplicates(subset=["h3_index"])
 
     # Groeperen per H3-index: gemiddeld energieverbruik en oppervlakte berekenen
     df_filtered = df_filtered.groupby("h3_index").agg({
-        "kWh_per_m2": "sum",  # Sum energieverbruik per hexagon
+        "kWh_per_m2": "mean",  # Gemiddelde energieverbruik per hexagon
         "oppervlakte": "mean",  # Totale oppervlakte per hexagon
-        "h3_index": "count" # Aantal huizen in de hexagoon
+        "h3_index": "count", # Aantal panden in de hexagoon
+        "bouwjaar": "mean" # Gemiddelde bouwjaar
     }).rename(columns={"h3_index": "aantal_huizen"}).reset_index()
 
     # Rond de gemiddelde waarde af op 1 decimaal
     df_filtered["kWh_per_m2"] = df_filtered["kWh_per_m2"].round(1)
     df_filtered["oppervlakte"] = df_filtered["oppervlakte"].round(1)
+    df_filtered["bouwjaar"] = df_filtered["bouwjaar"].round(0)
 
     # Nieuwe kleur bepalen op basis van het gemiddelde energieverbruik
     df_filtered['color'] = df_filtered["kWh_per_m2"].apply(get_color)
@@ -327,8 +298,8 @@ if st.session_state.show_map:
             extruded=extruded,
             get_hexagon="h3_index",
             get_fill_color=[26, 152, 80],
-            get_line_color=[0, 0, 0],
-            get_line_width=10,
+            get_line_color=[0, 0, 0, 0],
+            get_line_width=get_dynamic_line_width(zoom_level),
             visible=True
         )
 
@@ -389,32 +360,21 @@ if st.session_state.show_map:
         tooltip_html = """
             <b>Postcode:</b> {postcode}<br>
             <b>Woonplaats:</b> {woonplaats}<br>
-            <b>Straatnaam:</b> {openbare_ruimte}<br>
-            <b>Aantal objecten:</b> {aantal_huizen}<br>
-            <b>Huisnummer:</b> {huisnummer}<br>
-            <b>Huisletter:</b> {huisletter}<br>
-            <b>Som Energiegebruik:</b> {kWh_per_m2} kWh/m²<br>
-            <b>Oppervlakte:</b> {oppervlakte} m²<br>
-            <b>Energieklasse:</b> {Energieklasse} <br>
-            <b>Energiebehoefte:</b> {Energiebehoefte} <br>
-            <b>Aandeel Hernieuwbare Energie:</b> {AandeelHernieuwbareEnergie} <br>
-            <b>Warmtebehoefte:</b> {Warmtebehoefte} <br>
-            <b>Berekende CO2 Emissie:</b> {BerekendeCO2Emissie} <br>
-            <b>Berekende Energieverbruik:</b> {BerekendeEnergieverbruik} <br>
-            <b>Primaire Fossiele Energie:</b> {PrimaireFossieleEnergie} <br>
-            <b>Bouwjaar:</b> {bouwjaar} <br>
+            <b>Aantal panden:</b> {aantal_huizen}<br>
+            <b>Gemiddelde Energiegebruik:</b> {kWh_per_m2} kWh/m²<br>
+            <b>Gemiddelde Oppervlakte:</b> {oppervlakte} m²<br>
+            <b>Gemiddelde Bouwjaar:</b> {bouwjaar} <br>
+            # Toevoegen totale heatdemand van de gegroepeerde panden in de h3-index
         """
     else:
         tooltip_html = """
-            <b>Aantal objecten:</b> {aantal_huizen}<br>
-            <b>Totaal opgetelde Energiegebruik:</b> {kWh_per_m2} kWh/m²<br>
-            <b>Oppervlakte:</b> {oppervlakte} m²<br>
-            <b>Energiebehoefte:</b> {Energiebehoefte} <br>
-            <b>Aandeel Hernieuwbare Energie:</b> {AandeelHernieuwbareEnergie} <br>
-            <b>Warmtebehoefte:</b> {Warmtebehoefte} <br>
-            <b>Berekende CO2 Emissie:</b> {BerekendeCO2Emissie} <br>
-            <b>Berekende Energieverbruik:</b> {BerekendeEnergieverbruik} <br>
-            <b>PrimaireFossieleEnergie:</b> {PrimaireFossieleEnergie} <br>
+            <b>Postcode:</b> {postcode}<br>
+            <b>Woonplaats:</b> {woonplaats}<br>
+            <b>Aantal panden:</b> {aantal_huizen}<br>
+            <b>Gemiddelde Energiegebruik:</b> {kWh_per_m2} kWh/m²<br>
+            <b>Gemiddelde Oppervlakte:</b> {oppervlakte} m²<br>
+            <b>Gemiddelde Bouwjaar:</b> {bouwjaar} <br>
+            # Toevoegen totale heatdemand van de gegroepeerde panden in de h3-index
         """
 
     tooltip = {
@@ -427,6 +387,64 @@ if st.session_state.show_map:
             "border-radius": "5px"
         }
     }
+
+    # *Tegels*
+    # Aantal huizen berekenen
+    totaal_aantal_huizen = df_filtered["aantal_huizen"].sum()
+
+    # Totale heat demand berekenen
+    totaal_heat_demand = df_filtered["kWh_per_m2"].sum()
+
+    # CSS voor de tegel
+    st.markdown("""
+        <style>
+        .tile-container {
+            display: flex;
+            gap: 10px; /* Gap between the tiles */
+            margin-top: 0px;  /* Adjust gap between title and tiles */
+        }
+
+        .tile {
+            background-color: #f0f4f8; 
+            padding: 10px 30px;
+            border-radius: 15px;
+            box-shadow: 0 4px 8px rgba(0,0,0,0.1);
+            width: 100%;
+            text-align: center;
+            font-family: 'Arial', sans-serif;
+            border: 1px solid #dcdcdc; /* Neutral grey border */
+            margin-bottom: 20px;
+        }
+
+        .tile h2 {
+            margin: 0;
+            font-size: 32px;
+            color: #333333; /* Dark text for contrast */
+        }
+
+        .tile p {
+            margin: 5px 0 0;
+            font-size: 16px;
+            color: #7f8c8d; /* Light grey text for paragraph */
+        }
+
+        </style>
+    """, unsafe_allow_html=True)
+
+
+    # HTML layout voor twee tegels
+    st.markdown(f"""
+        <div class="tile-container">
+            <div class="tile">
+                <h2>{totaal_aantal_huizen:,}</h2>
+                <p>Aantal huizen</p>
+            </div>
+            <div class="tile">
+                <h2>{totaal_heat_demand:.1f} kWh/m²</h2>
+                <p>Gemiddeld verbruik</p>
+            </div>
+        </div>
+    """, unsafe_allow_html=True)
 
     st.pydeck_chart(
         pdk.Deck(
@@ -465,14 +483,10 @@ if st.session_state.show_map:
             }}
         </style>
         <div class="legend">
-            <div class="legend-title">Warmtepotentieel (kWh/m²)</div>
-            <div><span class="color-box" style="background-color: #4575b4;"></span> &lt; 15,0 </div>
-            <div><span class="color-box" style="background-color: #91bfdb;"></span> 15,0 - 40,0 </div>
-            <div><span class="color-box" style="background-color: #e0f3f8;"></span> 40,0 - 80,0 </div>
-            <div><span class="color-box" style="background-color: #ffffbf;"></span> 80,0 - 140,0 </div>
-            <div><span class="color-box" style="background-color: #fee090;"></span> 140,0 - 280,0 </div>
-            <div><span class="color-box" style="background-color: #fc8d59;"></span> 280,0 - 800,0 </div>
-            <div><span class="color-box" style="background-color: #d73027;"></span> &gt; 800,0 </div>
+            <div class="legend-title">Gemiddelde Warmtevraag in kWh/m²</div>
+            <div><span class="color-box" style="background-color: #4575b4;"></span> &lt; 10,0 </div>
+            <div><span class="color-box" style="background-color: #fee090;"></span> 10,0 - 50,0 </div>
+            <div><span class="color-box" style="background-color: #d73027;"></span> &gt; 50,0 </div>
             <div><span class="color-box" style="background-color: #1a9850;"></span> Potentie grenswaarde: {grenswaarde} </div>
         </div>
     """
