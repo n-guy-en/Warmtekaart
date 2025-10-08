@@ -111,7 +111,7 @@ def filters_fingerprint(params: dict, cell_ids: Iterable[str]) -> str:
 # ============================================================
 
 @st.cache_data(show_spinner=False, max_entries=10, ttl=300)
-def compute_clusters_cached(cache_key: str, df_hex_small: pd.DataFrame, k: int) -> pd.DataFrame:
+def compute_clusters_cached(cache_key: str, df_hex_small: pd.DataFrame, k: int, ttl=1800) -> pd.DataFrame:
     """
     Cached variant van aggregate_clusters zonder externe bestanden.
     Verwacht df_hex_small met kolommen:
@@ -154,6 +154,7 @@ def select_sites_from_clusters(
     topk: int,
     cap_mwh: float,
     cap_buildings: int,
+    ttl:1800,
 ) -> pd.DataFrame:
     """
     Neemt cluster_df met:

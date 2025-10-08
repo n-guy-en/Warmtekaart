@@ -157,7 +157,7 @@ with st.sidebar:
 # ========== H3 indexering en aggregaties ==========
 BASE_H3_RES = 12
 
-def _build_res12(df_src: pd.DataFrame):
+def _build_res12(df_src: pd.DataFrame, ttl=1200-1800):
     lat_np = df_src["latitude"].astype("float32").to_numpy()
     lon_np = df_src["longitude"].astype("float32").to_numpy()
     h3_res12 = [h3.latlng_to_cell(float(la), float(lo), BASE_H3_RES) for la, lo in zip(lat_np, lon_np)]
@@ -210,7 +210,7 @@ def build_res12_agg(df_points_res12: pd.DataFrame):
     return res12
 
 @st.cache_data(show_spinner=False, max_entries=5, ttl=300)
-def rollup_to_resolution(res12_agg: pd.DataFrame, target_res: int, _cache_key: int = 0):
+def rollup_to_resolution(res12_agg: pd.DataFrame, target_res: int, _cache_key: int = 0, ttl=1200-1800):
     if target_res == 12:
         out = res12_agg.copy().rename(columns={"h3_r12": "h3_index"})
     else:

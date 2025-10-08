@@ -26,7 +26,7 @@ from .config import (
 # ============================================================
 
 @st.cache_data(show_spinner=False)
-def load_geojson(path: str | Path, keep_props=None, coord_precision: int = 3):
+def load_geojson(path: str | Path, keep_props=None, coord_precision: int = 3, ttl=3600):
     """
     Laadt een GeoJSON-bestand als dict.
     - keep_props: lijst met property-namen die je wilt behouden (alles daarbuiten wordt gestript)
@@ -119,7 +119,7 @@ def _gdrive_to_cache(url: str, filename_hint: str = "data_kWh.csv") -> Path:
 
 # ===== Data loaders =====
 @st.cache_data(show_spinner=False)
-def load_data(src: str | Path | None = None) -> pd.DataFrame:
+def load_data(src: str | Path | None = None, ttl=3600) -> pd.DataFrame:
     """
     Laadt CSV/Parquet uit:
       - Google Drive URL  -> download 1x naar cache (gdown), lees lokaal
@@ -185,7 +185,7 @@ def load_data(src: str | Path | None = None) -> pd.DataFrame:
 # ============================================================
 
 @st.cache_data(show_spinner=False)
-def preload_geo_layers():
+def preload_geo_layers(ttl=3600):
     """
     Laadt alle geojson-lagen zoals in de monolith gedaan werd, met identieke keep_props.
     Retourneert dict met keys:
