@@ -169,8 +169,12 @@ need_rebuild = (
     or len(st.session_state.df_with_h3_res12) != len(df_filtered_input)
     or not st.session_state.df_with_h3_res12.index.equals(df_filtered_input.index)
 )
+
 if need_rebuild:
     st.session_state.df_with_h3_res12 = _build_res12(df_filtered_input)
+    # Ook de parent-cache leegmaken, anders blijven oude indices hangen
+    st.session_state.h3_parent_cache = {}
+
 
 if "h3_parent_cache" not in st.session_state:
     st.session_state.h3_parent_cache = {}  # {res: pd.Series}
@@ -186,7 +190,7 @@ def _ensure_parent_series_for(res: int) -> pd.Series:
     return ser
 
 # Snelle aggregatie op res12 + roll-up
-@st.cache_data(show_spinner=False, max_entries=10)
+@st.cache_data(show_spinner=False, max_entries=5, ttl=300)
 def build_res12_agg(df_points_res12: pd.DataFrame):
     tmp = df_points_res12.copy()
     tmp["kwh_sum"] = pd.to_numeric(tmp["kWh_per_m2"], errors="coerce").fillna(0).astype("float32")
@@ -205,7 +209,7 @@ def build_res12_agg(df_points_res12: pd.DataFrame):
     )
     return res12
 
-@st.cache_data(show_spinner=False, max_entries=10)
+@st.cache_data(show_spinner=False, max_entries=5, ttl=300)
 def rollup_to_resolution(res12_agg: pd.DataFrame, target_res: int, _cache_key: int = 0):
     if target_res == 12:
         out = res12_agg.copy().rename(columns={"h3_r12": "h3_index"})

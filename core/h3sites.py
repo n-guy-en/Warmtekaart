@@ -23,7 +23,7 @@ def _hash_ids(ids: Iterable[str]) -> str:
 # Neighbor pairs voor k-ring (gecacht)
 # ============================================================
 
-@st.cache_data(show_spinner=False, max_entries=10)
+@st.cache_data(show_spinner=False, max_entries=6, ttl=300)
 def build_neighbor_pairs(unique_cells: list[str], k: int) -> pd.DataFrame:
     """
     Bouw (center, neighbor)-paren voor alle cells in een k-ring.
@@ -40,7 +40,7 @@ def build_neighbor_pairs(unique_cells: list[str], k: int) -> pd.DataFrame:
 # k-ring aggregatie (cluster_MWh, cluster_buildings)
 # ============================================================
 
-@st.cache_data(show_spinner=False, max_entries=10)
+@st.cache_data(show_spinner=False, max_entries=6, ttl=300)
 def aggregate_clusters(df_hex: pd.DataFrame, k: int) -> pd.DataFrame:
     """
     Verwacht df_hex met kolommen:
@@ -110,7 +110,7 @@ def filters_fingerprint(params: dict, cell_ids: Iterable[str]) -> str:
 # Cached variant van cluster-aggregatie op shortlist
 # ============================================================
 
-@st.cache_data(show_spinner=False, max_entries=30)
+@st.cache_data(show_spinner=False, max_entries=10, ttl=300)
 def compute_clusters_cached(cache_key: str, df_hex_small: pd.DataFrame, k: int) -> pd.DataFrame:
     """
     Cached variant van aggregate_clusters zonder externe bestanden.
