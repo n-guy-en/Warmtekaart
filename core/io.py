@@ -128,15 +128,17 @@ def load_data(src: str | Path | None = None) -> pd.DataFrame:
     Als src None is: gebruik DATA_CSV_URL (secrets) of fallback naar DATA_CSV_PATH.
     Past daarna dezelfde kolom/dtype-opschoning toe als je monolith.
     """
-    # 0) Bron bepalen en valideren (NIEUW: guard)
+    # 0) Bron bepalen en valideren (met fallback-logic)
     if src is None or (isinstance(src, (str, Path)) and str(src).strip() == ""):
-        src = DATA_CSV_URL or DATA_CSV_PATH
-    if src is None or (isinstance(src, (str, Path)) and str(src).strip() == ""):
-        st.error(
-            "Geen datasetbron gevonden. Zet **WARMTE_URL_DATA_CSV** in Streamlit secrets "
-            "of zorg dat **data/data_kWh.csv** bestaat (of stel WARMTE_DATA_CSV in)."
-        )
-        st.stop()  # voorkomt TypeError: Path(None)
+        local_parquet = DATA_CSV_PATH.with_suffix(".parquet") if hasattr(DATA_CSV_PATH, "with_suffix") else None
+
+        if local_parquet and Path(local_parquet).exists():
+            src = local_parquet  # eerst lokaal Parquet
+        elif DATA_CSV_PATH.exists():
+            src = DATA_CSV_PATH  # dan lokaal CSV
+        else:
+            src = DATA_CSV_URL   # laatste optie: online CSV
+            
 
     # 1) URL of lokaal pad bepalen
     if isinstance(src, (str, Path)) and _is_url(str(src)):

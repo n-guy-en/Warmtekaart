@@ -49,7 +49,7 @@ def _env_url(var: str) -> str | None:
 # -----------------------------
 # Data sources (Paths + optional URLs)
 # -----------------------------
-DATA_CSV_PATH        = _env_path("WARMTE_DATA_CSV", DATA_DIR / "data_kWh.csv")
+DATA_CSV_PATH        = _env_path("WARMTE_DATA_CSV", DATA_DIR / "data_kWh.parquet")
 DATA_CSV_URL         = _env_url("WARMTE_URL_DATA_CSV")
 
 ENERGIEARMOEDE_PATH  = _env_path("WARMTE_LYR_ENERGIEARMOEDE", LAYERS_DIR / "energiearmoede_frl.geojson.gz")
