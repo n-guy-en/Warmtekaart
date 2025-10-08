@@ -1,5 +1,8 @@
-streamlit
-pydeck
-pandas
-h3
-gdown
+streamlit>=1.46
+pydeck>=0.9
+pandas>=2.2
+h3>=4.1
+matplotlib>=3.8
+orjson>=3.10
+pyarrow>=16.0
+gdown>=5.1
