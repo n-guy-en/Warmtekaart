@@ -312,9 +312,9 @@ def build_sidebar(df_in: pd.DataFrame) -> Tuple[pd.DataFrame, Dict[str, Any]]:
         # ---------------- Collectieve warmtevoorziening (analyse) ----------------
         with st.sidebar.expander("Collectieve warmtevoorziening (analyse)", expanded=False):
             ui["show_sites_layer"] = st.toggle("Warmtevoorzieningen", value=False, key="show_sites_layer")
-            ui["n_sites"] = st.number_input("Aantal collectieve warmtevoorzieningen", min_value=1, max_value=50, value=10, step=1, key="n_sites")
-            ui["kring_radius"] = st.slider("Bereik van de warmtevoorziening", 1, 30, 15, 1, key="kring_radius")
-            ui["min_sep"] = st.slider("Minimale afstand tussen warmtevoorzieningen", 1, 30, 15, 1, key="min_sep")
+            ui["kring_radius"] = st.slider("Bereik van de warmtevoorziening", 1, 20, 8, 1, key="kring_radius")
+            ui["min_sep"] = st.slider("Minimale afstand tussen warmtevoorzieningen", 1, 20, 8, 1, key="min_sep")
+            ui["n_sites"] = st.number_input("Aantal collectieve warmtevoorzieningen", min_value=1, max_value=25, value=8, step=1, key="n_sites")
 
             ui["cap_mwh"] = text_input_int("Capaciteit per voorziening (MWh)", key="cap_mwh", default=100_000)
             ui["cap_buildings"] = text_input_int("Max gebouwen per voorziening", key="cap_buildings", default=1_000)
