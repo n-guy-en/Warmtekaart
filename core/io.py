@@ -117,7 +117,7 @@ def _gdrive_to_cache(url: str, filename_hint: str = "data_kWh.csv") -> Path:
 
     return cache_path
 
-# ===== jouw bestaande loaders =====
+# ===== Data loaders =====
 @st.cache_data(show_spinner=False)
 def load_data(src: str | Path | None = None) -> pd.DataFrame:
     """
@@ -128,11 +128,17 @@ def load_data(src: str | Path | None = None) -> pd.DataFrame:
     Als src None is: gebruik DATA_CSV_URL (secrets) of fallback naar DATA_CSV_PATH.
     Past daarna dezelfde kolom/dtype-opschoning toe als je monolith.
     """
-    # bron bepalen
-    if src is None:
+    # 0) Bron bepalen en valideren (NIEUW: guard)
+    if src is None or (isinstance(src, (str, Path)) and str(src).strip() == ""):
         src = DATA_CSV_URL or DATA_CSV_PATH
+    if src is None or (isinstance(src, (str, Path)) and str(src).strip() == ""):
+        st.error(
+            "Geen datasetbron gevonden. Zet **WARMTE_URL_DATA_CSV** in Streamlit secrets "
+            "of zorg dat **data/data_kWh.csv** bestaat (of stel WARMTE_DATA_CSV in)."
+        )
+        st.stop()  # voorkomt TypeError: Path(None)
 
-    # URL-pad?
+    # 1) URL of lokaal pad bepalen
     if isinstance(src, (str, Path)) and _is_url(str(src)):
         s = str(src)
         if _is_gdrive(s):
@@ -143,8 +149,9 @@ def load_data(src: str | Path | None = None) -> pd.DataFrame:
     else:
         read_target = Path(src)
 
-    # lezen
-    if (isinstance(read_target, (str, Path)) and str(read_target).lower().endswith(".parquet")):
+    # 2) Inlezen
+    target_str = str(read_target).lower()
+    if target_str.endswith(".parquet"):
         df = pd.read_parquet(read_target)
     else:
         try:
@@ -152,7 +159,7 @@ def load_data(src: str | Path | None = None) -> pd.DataFrame:
         except Exception:
             df = pd.read_csv(read_target, low_memory=False)
 
-    # === dtypes/opschoon zoals eerder ===
+    # 3) Dtypes/opschonen (ongewijzigd)
     cols_num_int = [
         "aantal_VBOs",
         "totale_oppervlakte",
@@ -169,6 +176,7 @@ def load_data(src: str | Path | None = None) -> pd.DataFrame:
             df[c] = pd.to_numeric(df[c], errors="coerce").astype("float32")
 
     return df
+
 
 # ============================================================
 # Convenience: alle themalagen vooraf laden (exacte keep_props)
