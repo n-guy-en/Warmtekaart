@@ -234,7 +234,7 @@ if filters_changed:
     if (now - last) > 0.6:  # 600 ms
         st.session_state.prev_filters = current_filters
         st.session_state.show_map = True   # auto “Maak Kaart”
-        main_notice.info("De filters zijn gewijzigd. Kaart wordt automatisch bijgewerkt.")
+        st.toast("De filters zijn gewijzigd. Kaart wordt automatisch bijgewerkt.")
         st.session_state["_last_auto_update"] = now
 
 # ========== H3 indexering en aggregaties ==========
