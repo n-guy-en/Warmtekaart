@@ -625,7 +625,7 @@ else:
         if st.session_state.get("_map_dirty"):
             st.info("Filters gewijzigd. Klik op 'Maak kaart' om de kaart bij te werken.")
         elif not st.session_state.get("first_hint_shown", False):
-            st.info("Selecteer de gewenste filters. Klik op 'Maak kaart' om de kaart weer te geven.")
+            st.info("Selecteer de gewenste filters. Klik vervolgens op 'Maak kaart' om de kaart weer te geven.")
             st.session_state["first_hint_shown"] = True
         else:
             st.info("Klik op 'Maak kaart' om de kaart weer te geven.")
