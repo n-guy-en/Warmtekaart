@@ -11,6 +11,7 @@ import orjson
 import pandas as pd
 import pydeck as pdk
 import streamlit as st
+import threading, time
 
 # ---- interne modules (uit deze repo) ----
 from core.config import (
@@ -53,6 +54,26 @@ from core.io import load_geojson, load_data  # centrale loaders
 from ui.sidebar import build_sidebar
 from ui.kpis_and_tables import render_kpis, render_tabs
 
+# RAM fix
+def _periodic_cache_clear(interval_min: int = 30):
+    """Leeg de Streamlit cache elke `interval_min` minuten in een achtergrondthread."""
+    def _loop():
+        while True:
+            time.sleep(interval_min * 60)
+            try:
+                st.cache_data.clear()
+                # optioneel: noteer het tijdstip in session_state voor UI-feedback
+                st.session_state["last_cache_clear_ts"] = time.time()
+                print(f"[AUTO-CLEAR] Cache leeggemaakt (interval={interval_min} min)")
+            except Exception as e:
+                print(f"[AUTO-CLEAR ERROR] {e}")
+    t = threading.Thread(target=_loop, daemon=True)
+    t.start()
+
+# Start de cleaner bij app-opstart
+if "auto_cache_cleaner_started" not in st.session_state:
+    _periodic_cache_clear(30)  # elke 30 min
+    st.session_state["auto_cache_cleaner_started"] = True
 
 # ========== Streamlit pagina setup ==========
 st.set_page_config(page_title="Friese Warmtevraagkaart", layout="wide")
@@ -115,44 +136,106 @@ def _as_sorted_list(x):
         return sorted(list(x))
     return [x]
 
-# Bewaak filter-wijzigingen (precies als monolith)
-if "prev_filters" not in st.session_state:
-    st.session_state.prev_filters = {
-        "zoom_level": ui["zoom_level"],
-        "threshold": ui["threshold"],
-        "woonplaats": _as_sorted_list(ui["woonplaats_selectie"]),
-        "Energieklasse": _as_sorted_list(ui["energieklasse_selectie"]),
-        "bouwjaar_range": tuple(ui["bouwjaar_range"]),
-        "type_pand": ui["pand_selectie"],
+# Bewaak filter-wijzigingen
+# ===== Helpers voor stabiele vergelijkingen =====
+def _as_sorted_list(x):
+    if x is None:
+        return []
+    if isinstance(x, (list, tuple, set)):
+        return sorted(list(x))
+    return [x]
+
+def _as_int(x, default=0):
+    try:
+        return int(x)
+    except Exception:
+        return default
+
+def _as_float(x, default=0.0):
+    try:
+        return float(x)
+    except Exception:
+        return default
+
+def _as_tuple_2(x, default=(0, 0)):
+    try:
+        a, b = x
+        return (_as_int(a), _as_int(b))
+    except Exception:
+        return default
+
+# ===== Bouw een volledig filters-profiel uit alle UI/state =====
+def _build_filters_snapshot(ui: dict) -> dict:
+    # Lagen-config keys (uit config)
+    L = st.session_state.LAYER_CFG
+
+    snap = {
+        # Kaart & resolutie
+        "zoom_level":          _as_int(ui.get("zoom_level")),
+        "resolution":          _as_int(ui.get("resolution")),
+        "extruded":            bool(ui.get("extruded")),
+        "map_style":           ui.get("map_style", "light"),
+        "hide_basemap":        bool(ui.get("hide_basemap", False)),
+
+        # Hoofdlaag + indicatief
+        "show_main_layer":     bool(ui.get("show_main_layer", True)),
+        "show_indicative":     bool(ui.get("show_indicative_layer", True)),
+        "threshold":           _as_float(ui.get("threshold", 50.0)),
+
+        # Woonplaats / filters
+        "woonplaats":          _as_sorted_list(ui.get("woonplaats_selectie")),
+        "Energieklasse":       _as_sorted_list([str(x) for x in ui.get("energieklasse_selectie", [])]),
+        "bouwjaar_range":      _as_tuple_2(ui.get("bouwjaar_range", (0, 3000))),
+        "type_pand":           str(ui.get("pand_selectie", "")),
+
+        # Woonlagen (extra layers) + opacity
+        L["energiearmoede"]["toggle_key"]:  bool(st.session_state.get(L["energiearmoede"]["toggle_key"], False)),
+        L["koopwoningen"]["toggle_key"]:    bool(st.session_state.get(L["koopwoningen"]["toggle_key"], False)),
+        L["wooncorporatie"]["toggle_key"]:  bool(st.session_state.get(L["wooncorporatie"]["toggle_key"], False)),
+        "extra_opacity":       _as_float(ui.get("extra_opacity", 0.55)),
+
+        # Bodemlagen (spoor/water) + opacity
+        L["spoordeel"]["toggle_key"]:       bool(st.session_state.get(L["spoordeel"]["toggle_key"], False)),
+        L["waterdeel"]["toggle_key"]:       bool(st.session_state.get(L["waterdeel"]["toggle_key"], False)),
+        "spoor_opacity":       _as_float(ui.get("spoor_opacity", 0.5)),
+        "water_opacity":       _as_float(ui.get("water_opacity", 0.6)),
+
+        # Participatie (voor KPI’s)
+        "participatie":        _as_int(ui.get("participatie", st.session_state.get("participatie", 80))),
+
+        # Sites/Collectieve warmtevoorziening (analyse)
+        "show_sites_layer":    bool(ui.get("show_sites_layer", False)),
+        "kring_radius":        _as_int(ui.get("kring_radius", st.session_state.get("kring_radius", 3))),
+        "min_sep":             _as_int(ui.get("min_sep", st.session_state.get("min_sep", 3))),
+        "n_sites":             _as_int(ui.get("n_sites", st.session_state.get("n_sites", 3))),
+        "cap_mwh":             _as_int(ui.get("cap_mwh", st.session_state.get("cap_mwh", 100_000))),
+        "cap_buildings":       _as_int(ui.get("cap_buildings", st.session_state.get("cap_buildings", 1_000))),
+        "fixed_cost":          _as_int(ui.get("fixed_cost", st.session_state.get("fixed_cost", 25_000))),
+        "var_cost":            _as_int(ui.get("var_cost", st.session_state.get("var_cost", 35))),
+        "opex_pct":            _as_int(ui.get("opex_pct", st.session_state.get("opex_pct", 10))),
     }
+    return snap
 
-current_filters = {
-    "zoom_level": ui["zoom_level"],
-    "threshold": ui["threshold"],
-    "woonplaats": _as_sorted_list(ui["woonplaats_selectie"]),
-    "Energieklasse": _as_sorted_list(ui["energieklasse_selectie"]),
-    "bouwjaar_range": tuple(ui["bouwjaar_range"]),
-    "type_pand": ui["pand_selectie"],
-}
+# ===== Init vorige filters =====
+if "prev_filters" not in st.session_state:
+    st.session_state.prev_filters = _build_filters_snapshot(ui)
+
+# ===== Vergelijk huidige met vorige =====
+current_filters = _build_filters_snapshot(ui)
 prev = st.session_state.prev_filters
-filters_changed = any([
-    current_filters["zoom_level"]    != prev.get("zoom_level"),
-    current_filters["threshold"]     != prev.get("threshold"),
-    current_filters["woonplaats"]    != _as_sorted_list(prev.get("woonplaats")),
-    current_filters["Energieklasse"] != _as_sorted_list(prev.get("Energieklasse")),
-    current_filters["bouwjaar_range"]!= prev.get("bouwjaar_range"),
-    current_filters["type_pand"]     != prev.get("type_pand"),
-])
 
+filters_changed = current_filters != prev  # diepe dict-vergelijking is nu genoeg
+
+# ===== Reageer op filter-wijzigingen =====
 if filters_changed:
-    st.session_state.show_map = False
-    st.session_state.prev_filters = current_filters
-    main_notice.warning("De filters zijn gewijzigd. Klik op **‘Maak Kaart’** om de kaart bij te werken.")
-
-with st.sidebar:
-    if st.button("Maak Kaart", type="primary"):
-        st.session_state.show_map = True
-        main_notice.empty()
+    # (optioneel) debounce om niet meerdere renders per seconde te doen
+    now = time.time()
+    last = st.session_state.get("_last_auto_update", 0)
+    if (now - last) > 0.6:  # 600 ms
+        st.session_state.prev_filters = current_filters
+        st.session_state.show_map = True   # auto “Maak Kaart”
+        main_notice.info("De filters zijn gewijzigd. Kaart wordt automatisch bijgewerkt.")
+        st.session_state["_last_auto_update"] = now
 
 # ========== H3 indexering en aggregaties ==========
 BASE_H3_RES = 12
@@ -374,6 +457,7 @@ if st.session_state.show_map:
             topk=st.session_state.n_sites,
             cap_mwh=float(st.session_state.cap_mwh),
             cap_buildings=int(st.session_state.cap_buildings),
+            ttl=1800,
         )
 
         # Voeg woonplaats toe + gebied_label
