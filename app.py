@@ -434,11 +434,6 @@ if st.session_state.show_map:
     df_filtered_area = df_filtered.copy()
     df_filtered_area["indicatief_aandachtsgebied"] = df_filtered_area["kWh_per_m2"] > threshold
 
-    #  Limit hex cells naar PyDeck --> protect RAM and browser performance
-    MAX_HEX = 10000
-    if len(df_filtered) > MAX_HEX:
-        df_filtered = df_filtered.nlargest(MAX_HEX, "gemiddeld_jaarverbruik_mWh")
-
     # --------- Warmtevoorziening (alleen als toggle aan) ---------
     if ui["show_sites_layer"]:
         shortlist_top_frac = 0.6
