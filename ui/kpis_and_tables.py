@@ -6,14 +6,19 @@ import streamlit as st
 
 from core.utils import format_dutch_number
 
-
 # =========================
 # KPI CARDS
 # =========================
 
 def _nl_int(x) -> str:
-    return f"{int(x):,}".replace(",", ".")
-
+    try:
+        return f"{int(x):,}".replace(",", ".")
+    except Exception:
+        # fallback voor floats/NaN
+        try:
+            return format_dutch_number(x, 0)
+        except Exception:
+            return "0"
 
 def _kpi_css():
     st.markdown("""
@@ -25,7 +30,6 @@ def _kpi_css():
     </style>
     """, unsafe_allow_html=True)
 
-
 def _kpi_card(title: str, value: str, sub: str):
     st.markdown(
         f"<div class='kpi-card'><div class='kpi-title'>{title}</div>"
@@ -34,7 +38,6 @@ def _kpi_card(title: str, value: str, sub: str):
         unsafe_allow_html=True
     )
 
-
 def render_kpis(df_filtered: pd.DataFrame, participatie_pct: int):
     """
     Toont 4 KPI-kaarten:
@@ -42,11 +45,17 @@ def render_kpis(df_filtered: pd.DataFrame, participatie_pct: int):
     - Deelnamegraad (panden)
     - Totale Heat Demand (MWh)
     - Deelnamegraad (MWh)
+    RAM-zuinig: direct aggregaties op Series, geen extra kopieën.
     """
     _kpi_css()
 
-    totaal_panden = int(df_filtered["aantal_huizen"].sum())
-    totaal_mwh = int(df_filtered["gemiddeld_jaarverbruik_mWh"].sum())
+    # Gebruik .get met default Series om KeyError te vermijden (RAM-zuinig)
+    s_panden = pd.to_numeric(df_filtered.get("aantal_huizen", pd.Series([], dtype="int32")), errors="coerce").fillna(0)
+    s_mwh = pd.to_numeric(df_filtered.get("gemiddeld_jaarverbruik_mWh", pd.Series([], dtype="float32")), errors="coerce").fillna(0)
+
+    totaal_panden = int(s_panden.sum()) if len(s_panden) else 0
+    totaal_mwh = int(round(float(s_mwh.sum()))) if len(s_mwh) else 0
+
     pct = int(participatie_pct)
     panden_part = round(totaal_panden * pct / 100)
     mwh_part = round(totaal_mwh * pct / 100)
@@ -66,68 +75,67 @@ def render_kpis(df_filtered: pd.DataFrame, participatie_pct: int):
 # TABELLEN / TABS
 # =========================
 
-def _fmt0(x): 
+def _fmt0(x):
     try:
         return format_dutch_number(int(x), 0)
     except Exception:
         return format_dutch_number(x, 0)
 
-def _fmt2(x): 
+def _fmt2(x):
     return format_dutch_number(x, 2)
-
 
 def render_tabs(df_filtered: pd.DataFrame, threshold: float, show_sites_layer: bool, sites_costed: pd.DataFrame | None):
     """
-    Bouwt tabs:
+    Tabs:
       - Top woonplaatsen (MWh)  [altijd]
-      - Top aandachtsgebieden   [alleen als show_sites_layer]
       - Kandidaat-voorzieningen [alleen als show_sites_layer]
-    Met exact dezelfde kolomnamen/formatting als monolith.
+    RAM-zuinig: minimale kolomselecties, vectorized formatting.
     """
+    if isinstance(sites_costed, list):
+        sites_costed_df = pd.DataFrame(sites_costed)
+    else:
+        sites_costed_df = sites_costed
+
     if show_sites_layer:
-        tab1, tab2, tab3 = st.tabs(["Top woonplaatsen (MWh)", "Top aandachtsgebieden", "Kandidaat-voorzieningen"])
+        tab1, tab2 = st.tabs(["Top woonplaatsen (MWh)", "Kandidaat-voorzieningen"])
     else:
         (tab1,) = st.tabs(["Top woonplaatsen (MWh)"])
 
-    # --- TAB 1: altijd tonen ---
+    # --- TAB 1: Top woonplaatsen (MWh) ---
     with tab1:
-        top_wp = (
-            df_filtered.groupby("woonplaats", as_index=False)["gemiddeld_jaarverbruik_mWh"]
-            .sum().rename(columns={"gemiddeld_jaarverbruik_mWh": "MWh"})
-            .sort_values("MWh", ascending=False).head(15)
-        )
-        top_wp_fmt = top_wp.copy()
-        top_wp_fmt["MWh"] = top_wp_fmt["MWh"].apply(lambda x: format_dutch_number(x, 0))
-        st.dataframe(top_wp_fmt, width="stretch", height=420, hide_index=True)
+        # Beperk kolommen vóór groupby
+        col_wp = "woonplaats"
+        col_mwh = "gemiddeld_jaarverbruik_mWh"
+        df_wp = df_filtered.loc[:, [col_wp, col_mwh]] if {col_wp, col_mwh} <= set(df_filtered.columns) else pd.DataFrame(columns=[col_wp, col_mwh])
 
-    # --- TAB 2: Top aandachtsgebieden ---
-    if show_sites_layer:
-        with tab2:
-            hot_hex = (
-                df_filtered[df_filtered["kWh_per_m2"] > threshold]
-                .sort_values("kWh_per_m2", ascending=False)
-                .loc[:, ["woonplaats", "kWh_per_m2", "MWh_per_ha", "gemiddeld_jaarverbruik_mWh_r"]]
-                .head(30)
-                .rename(columns={
-                    "woonplaats": "Woonplaats",
-                    "kWh_per_m2": "Gemiddeld energieverbruik (kWh/m²)",
-                    "MWh_per_ha": "Warmtevraag-dichtheid (MWh/ha)",
-                    "gemiddeld_jaarverbruik_mWh_r": "Totale Heat Demand"
-                })
+        if not df_wp.empty:
+            s = pd.to_numeric(df_wp[col_mwh], errors="coerce").fillna(0)
+            top_wp = (
+                df_wp.assign(**{col_mwh: s})
+                      .groupby(col_wp, as_index=False, sort=False, observed=True)[col_mwh]
+                      .sum()
+                      .rename(columns={col_mwh: "MWh"})
+                      .sort_values("MWh", ascending=False)
+                      .head(15)
             )
-            hot_hex_fmt = hot_hex.copy()
-            hot_hex_fmt["Gemiddeld energieverbruik (kWh/m²)"] = hot_hex_fmt["Gemiddeld energieverbruik (kWh/m²)"].apply(lambda x: format_dutch_number(x, 0))
-            hot_hex_fmt["Warmtevraag-dichtheid (MWh/ha)"] = hot_hex_fmt["Warmtevraag-dichtheid (MWh/ha)"].apply(lambda x: format_dutch_number(x, 2))
-            hot_hex_fmt["Totale Heat Demand"] = hot_hex_fmt["Totale Heat Demand"].apply(lambda x: format_dutch_number(x, 0) + " MWh")
-            st.dataframe(hot_hex_fmt, width="stretch", height=420, hide_index=True)
+            # Vectorized formatting (vermijd apply lambda per rij waar mogelijk)
+            top_wp_fmt = top_wp.copy()
+            top_wp_fmt["MWh"] = top_wp_fmt["MWh"].round(0).astype("int64").map(lambda v: f"{v:,}".replace(",", "."))
+            st.dataframe(top_wp_fmt, width="stretch", height=420, hide_index=True)
+        else:
+            st.info("Geen gegevens om te tonen.")
 
     # --- TAB 3: Kandidaat-voorzieningen ---
-        with tab3:
-            if sites_costed is not None and not sites_costed.empty:
-                out = sites_costed[[
+    if show_sites_layer:
+        with tab2:
+            if sites_costed_df is not None and not sites_costed_df.empty:
+                cols_keep = [
                     "gebied_label", "cluster_buildings", "cap_buildings", "connected_buildings",
                     "cluster_MWh", "cap_MWh", "connected_MWh", "utilization_pct", "indicatieve_kosten_site"
-                ]].rename(columns={
+                ]
+                have = [c for c in cols_keep if c in sites_costed_df.columns]
+                out = sites_costed_df.loc[:, have].copy()
+                rename_map = {
                     "gebied_label": "Gebied",
                     "cluster_buildings": "Gebouwen\nin radar",
                     "cap_buildings": "Capaciteit\ngebouwen",
@@ -137,31 +145,32 @@ def render_tabs(df_filtered: pd.DataFrame, threshold: float, show_sites_layer: b
                     "connected_MWh": "Aangesloten\nMWh",
                     "utilization_pct": "Benutting\n(%)",
                     "indicatieve_kosten_site": "Indicatieve\njaarlast (€)"
-                })
+                }
+                out.rename(columns={k: v for k, v in rename_map.items() if k in out.columns}, inplace=True)
 
-                total_row = pd.DataFrame([{
-                    "Gebied": "Totaal",
-                    "Gebouwen\nin radar": out["Gebouwen\nin radar"].sum(),
-                    "Capaciteit\ngebouwen": out["Capaciteit\ngebouwen"].sum(),
-                    "Aangesloten\ngebouwen": out["Aangesloten\ngebouwen"].sum(),
-                    "MWh\nin radar": out["MWh\nin radar"].sum(),
-                    "Capaciteit\nMWh": out["Capaciteit\nMWh"].sum(),
-                    "Aangesloten\nMWh": out["Aangesloten\nMWh"].sum(),
-                    "Benutting\n(%)": None,
-                    "Indicatieve\njaarlast (€)": out["Indicatieve\njaarlast (€)"].sum()
-                }])
-
-                out = out.loc[:, out.notna().any()]
-                total_row = total_row.loc[:, total_row.notna().any()]
-                out_full = pd.concat([out, total_row], ignore_index=True)
-
-                cols_to_format = [
+                # Totaalrij (alleen over kolommen die bestaan)
+                totals = {}
+                for col in [
                     "Gebouwen\nin radar", "Capaciteit\ngebouwen", "Aangesloten\ngebouwen",
                     "MWh\nin radar", "Capaciteit\nMWh", "Aangesloten\nMWh", "Indicatieve\njaarlast (€)"
-                ]
+                ]:
+                    if col in out.columns:
+                        totals[col] = pd.to_numeric(out[col], errors="coerce").fillna(0).sum()
+                if totals:
+                    totals_row = {"Gebied": "Totaal", **totals}
+                    out_full = pd.concat([out, pd.DataFrame([totals_row])], ignore_index=True)
+                else:
+                    out_full = out
+
+                # Formatteringen (kolomsgewijs)
                 out_fmt = out_full.copy()
-                for col in cols_to_format:
-                    out_fmt[col] = out_fmt[col].apply(lambda x: format_dutch_number(x, decimals=0))
+                for col in [
+                    "Gebouwen\nin radar", "Capaciteit\ngebouwen", "Aangesloten\ngebouwen",
+                    "MWh\nin radar", "Capaciteit\nMWh", "Aangesloten\nMWh", "Indicatieve\njaarlast (€)"
+                ]:
+                    if col in out_fmt.columns:
+                        s = pd.to_numeric(out_fmt[col], errors="coerce").fillna(0).round(0).astype("int64")
+                        out_fmt[col] = s.map(lambda v: f"{v:,}".replace(",", "."))
 
                 st.dataframe(out_fmt, width="stretch", height=440, hide_index=True)
             else:

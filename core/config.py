@@ -52,6 +52,9 @@ def _env_url(var: str) -> str | None:
 DATA_CSV_PATH        = _env_path("WARMTE_DATA_CSV", DATA_DIR / "data_kWh.parquet")
 DATA_CSV_URL         = _env_url("WARMTE_URL_DATA_CSV")
 
+PRECOMPUTED_DIR       = DATA_DIR / "precomputed"
+H3_RES12_GROUPED_PATH = PRECOMPUTED_DIR / "h3_res12_grouped.parquet"
+
 ENERGIEARMOEDE_PATH  = _env_path("WARMTE_LYR_ENERGIEARMOEDE", LAYERS_DIR / "energiearmoede_frl.geojson.gz")
 
 KOOPWONINGEN_PATH    = _env_path("WARMTE_LYR_KOOPWONINGEN",   LAYERS_DIR / "koopwoningen_frl.geojson.gz")

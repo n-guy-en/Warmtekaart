@@ -1,6 +1,8 @@
 # core/layers.py
 from __future__ import annotations
 
+from typing import Iterable, List, Dict, Any, Union
+
 import pydeck as pdk
 import streamlit as st
 
@@ -10,7 +12,34 @@ from .utils import (
     _spoor_rgb_from_cfg,
     get_dynamic_line_width,
     colorize_geojson_cached,
+    format_dutch_number,
 )
+
+JSONLike = Union[Dict[str, Any], List[Dict[str, Any]]]
+Records = List[Dict[str, Any]]
+
+# ------------------------------------------------------------
+# Helpers: data normaliseren naar records (list[dict])
+# ------------------------------------------------------------
+def _to_records(data: Union[Records, "pd.DataFrame"]) -> Records:
+    """Accepteer DataFrame of list[dict] en geef list[dict] terug."""
+    if data is None:
+        return []
+    try:
+        import pandas as pd  # lazy
+        if isinstance(data, pd.DataFrame):
+            return data.to_dict("records")
+    except Exception:
+        pass
+    if isinstance(data, list):
+        return [dict(x) for x in data]
+    return []
+
+def _fmt0(x):
+    try:
+        return format_dutch_number(int(x), 0)
+    except Exception:
+        return format_dutch_number(x, 0)
 
 # ------------------------------------------------------------
 # GeoJSON filteren op selectie (zoom 11–12)
@@ -18,7 +47,7 @@ from .utils import (
 def filter_geojson_by_selection(gjson: dict, woonplaatsen: list[str] | None, zoom_level: int):
     if not gjson:
         return gjson
-    if zoom_level < 11:  # alleen op 11 en 12 filteren
+    if zoom_level < 11:
         return gjson
     if not woonplaatsen:
         return gjson
@@ -28,18 +57,16 @@ def filter_geojson_by_selection(gjson: dict, woonplaatsen: list[str] | None, zoo
         pr = (f.get("properties") or {})
         gm = str(pr.get("gemeentenaam", "")).strip().lower()
         bn = str(pr.get("buurtnaam", "")).strip().lower()
-        # Houd feature als gemeentenaam in selectie zit of (fallback) buurtnaam matcht
         if gm in wp or bn in wp:
             feats.append(f)
     return {"type": "FeatureCollection", "features": feats}
-
 
 # ------------------------------------------------------------
 # Basemap
 # ------------------------------------------------------------
 def build_base_layers(style_key: str, hide_basemap: bool):
     """
-    Basemap via TileLayer(s); Geen achtergrondkaart'.
+    Basemap via TileLayer(s); 'Geen achtergrondkaart'.
     - hide_flag=True → geen achtergrondlagen
     """
     if hide_basemap:
@@ -48,7 +75,6 @@ def build_base_layers(style_key: str, hide_basemap: bool):
     conf = BASEMAP_CFG.get(style_key, {})
     layers_local = []
 
-    # Hoofdtegel
     if conf.get("tile"):
         layers_local.append(pdk.Layer(
             "TileLayer",
@@ -58,7 +84,6 @@ def build_base_layers(style_key: str, hide_basemap: bool):
             tileSize=256
         ))
 
-    # Optionele labels-overlay
     if conf.get("labels"):
         layers_local.append(pdk.Layer(
             "TileLayer",
@@ -70,14 +95,14 @@ def build_base_layers(style_key: str, hide_basemap: bool):
 
     return layers_local
 
-
 # ------------------------------------------------------------
 # H3 hoofdlaag + indicatieve laag
 # ------------------------------------------------------------
-def create_main_layer(df_filtered, show: bool, extruded: bool, zoom_level: int, elevation_scale: float):
+def create_main_layer(data_hex_df, show: bool, extruded: bool, zoom_level: int, elevation_scale: float):
+    # verwacht een DataFrame (geen list[dict])
     return pdk.Layer(
         "H3HexagonLayer",
-        df_filtered,
+        data_hex_df,
         pickable=True, filled=True, extruded=extruded, coverage=1,
         auto_highlight=False,
         get_hexagon="h3_index",
@@ -89,11 +114,15 @@ def create_main_layer(df_filtered, show: bool, extruded: bool, zoom_level: int, 
         visible=show,
     )
 
-
-def create_indicative_area_layer(df_filtered_area, threshold: float, extruded: bool, zoom_level: int):
+def create_indicative_area_layer(data, extruded: bool, zoom_level: int):
+    """
+    H3 laag voor indicatieve aandachtsgebieden. Verwacht een reeds gefilterde bron
+    (DataFrame of list[dict]) met minimaal de kolom h3_index.
+    """
+    data_src = data
     return pdk.Layer(
         "H3HexagonLayer",
-        df_filtered_area[df_filtered_area["indicatief_aandachtsgebied"] == True],
+        data_src,
         pickable=True, filled=True, extruded=extruded,
         get_hexagon="h3_index",
         get_fill_color=[58, 27, 47, 200],
@@ -102,39 +131,105 @@ def create_indicative_area_layer(df_filtered_area, threshold: float, extruded: b
         visible=True
     )
 
-
-def create_layers_by_zoom(df_filtered, show_main: bool, extruded: bool, zoom_level: int):
+def create_layers_by_zoom(data_hex_df, show_main: bool, extruded: bool, zoom_level: int):
+    # Verwacht hier een DataFrame (geen list[dict])
     layers = []
     if zoom_level <= 3:
-        layers.append(create_main_layer(df_filtered, show_main, extruded, zoom_level, 0.01))
-    if 4 <= zoom_level <= 7:
-        layers.append(create_main_layer(df_filtered, show_main, extruded, zoom_level, 0.05))
-    if 8 <= zoom_level <= 11:
-        layers.append(create_main_layer(df_filtered, show_main, extruded, zoom_level, 0.08))
-    if zoom_level >= 12:
-        layers.append(create_main_layer(df_filtered, show_main, extruded, zoom_level, 0.10))
+        layers.append(create_main_layer(data_hex_df, show_main, extruded, zoom_level, 0.01))
+    elif 4 <= zoom_level <= 7:
+        layers.append(create_main_layer(data_hex_df, show_main, extruded, zoom_level, 0.05))
+    elif 8 <= zoom_level <= 11:
+        layers.append(create_main_layer(data_hex_df, show_main, extruded, zoom_level, 0.08))
+    else:  # zoom_level >= 12
+        layers.append(create_main_layer(data_hex_df, show_main, extruded, zoom_level, 0.10))
     return layers
-
 
 # ------------------------------------------------------------
 # Sites (H3 contour + scatter markers)
 # ------------------------------------------------------------
-def create_site_layers(sites_df, sites_costed=None):
+def create_site_layers(
+    sites_data: Union[Records, "pd.DataFrame"],
+    sites_costed: Union[Records, "pd.DataFrame", None] = None
+):
+    """
+    Maakt:
+      - H3HexagonLayer contour voor gekozen sites
+      - ScatterplotLayer markers met alle tooltip-velden (incl. *_fmt)
+    """
     site_layers = []
-    if sites_df is not None and not sites_df.empty:
+    records = _to_records(sites_data)
+    if not records:
+        return site_layers
+
+    # H3 contour (alleen id + display toggles)
+    contour_records = [{
+        "h3_index": r.get("h3_index"),
+        "hex_section_display": r.get("hex_section_display", "none"),
+        "site_section_display": r.get("site_section_display", "block"),
+        "geo_section_display": r.get("geo_section_display", "none"),
+    } for r in records if r.get("h3_index")]
+    if contour_records:
         site_layers.append(pdk.Layer(
             "H3HexagonLayer",
-            sites_df[["h3_index", "hex_section_display", "site_section_display"]],
+            contour_records,
             pickable=False, filled=False, stroked=True,
             get_hexagon="h3_index",
             get_line_color=[26, 152, 80, 255],
             lineWidthMinPixels=2,
             visible=True
         ))
-        sites = sites_costed if sites_costed is not None else sites_df
+
+    # Scatter markers: gebruik 'costed' records indien aanwezig
+    use_records = _to_records(sites_costed) if sites_costed is not None else records
+
+    scatter_records = []
+    for r in use_records:
+        lon, lat = r.get("lon"), r.get("lat")
+        if lon is None or lat is None:
+            continue
+
+        # ruwe waarden
+        cluster_buildings = r.get("cluster_buildings")
+        cap_buildings = r.get("cap_buildings")
+        connected_buildings = r.get("connected_buildings")
+        cluster_MWh = r.get("cluster_MWh")
+        cap_MWh = r.get("cap_MWh")
+        connected_MWh = r.get("connected_MWh")
+        utilization_pct = r.get("utilization_pct")
+
+        scatter_records.append({
+            "lon": lon,
+            "lat": lat,
+            "woonplaats": r.get("woonplaats", ""),
+
+            # raw
+            "cluster_buildings": cluster_buildings,
+            "cap_buildings": cap_buildings,
+            "connected_buildings": connected_buildings,
+            "cluster_MWh": cluster_MWh,
+            "cap_MWh": cap_MWh,
+            "connected_MWh": connected_MWh,
+            "utilization_pct": utilization_pct,
+
+            # formatted for tooltip (maak ze indien niet aanwezig)
+            "cluster_buildings_fmt": r.get("cluster_buildings_fmt") or _fmt0(cluster_buildings),
+            "cap_buildings_fmt": r.get("cap_buildings_fmt") or _fmt0(cap_buildings),
+            "connected_buildings_fmt": r.get("connected_buildings_fmt") or _fmt0(connected_buildings),
+            "cluster_MWh_fmt": r.get("cluster_MWh_fmt") or _fmt0(cluster_MWh),
+            "cap_MWh_fmt": r.get("cap_MWh_fmt") or _fmt0(cap_MWh),
+            "connected_MWh_fmt": r.get("connected_MWh_fmt") or _fmt0(connected_MWh),
+            "utilization_pct_fmt": r.get("utilization_pct_fmt") or (str(int(utilization_pct)) if utilization_pct is not None else ""),
+
+            # display-velden voor tooltip-secties
+            "hex_section_display": r.get("hex_section_display", "none"),
+            "site_section_display": r.get("site_section_display", "block"),
+            "geo_section_display": r.get("geo_section_display", "none"),
+        })
+
+    if scatter_records:
         site_layers.append(pdk.Layer(
             "ScatterplotLayer",
-            sites,
+            scatter_records,
             pickable=True,
             get_position=["lon", "lat"],
             get_radius=25,
@@ -142,8 +237,8 @@ def create_site_layers(sites_df, sites_costed=None):
             radius_min_pixels=6,
             radius_max_pixels=10
         ))
-    return site_layers
 
+    return site_layers
 
 # ------------------------------------------------------------
 # Woonlagen (energiearmoede/koop/corporatie)
@@ -165,12 +260,11 @@ def _geojson_layer(data, name, fill_color, line_color, opacity=0.5):
         opacity=float(opacity),
     )
 
-
 def create_extra_layers(geojson_dict: dict, woonplaats_selectie: list[str], zoom_level: int, extra_opacity: float = 0.4):
     """
-    Bouwt de drie woonlagen precies zoals je deed:
+    Woonlagen:
     - filteren op zoom+woonplaats
-    - kleurtoekenning met gecachete functie
+    - kleurtoekenning (cached)
     - labels/props voor tooltip meegeven
     """
     layers = []
@@ -229,7 +323,6 @@ def create_extra_layers(geojson_dict: dict, woonplaats_selectie: list[str], zoom
 
     return layers
 
-
 # ------------------------------------------------------------
 # Bodemlagen (spoor/water)
 # ------------------------------------------------------------
@@ -273,8 +366,7 @@ def create_bodem_layers(geojson_dict: dict):
             get_line_color=[r_w, g_w, b_w, 255],
             lineWidthMinPixels=1,
             opacity=float(st.session_state.get("water_opacity", 0.6)),
-            # minZoom/maxZoom meegeven:
-            # minZoom=6, maxZoom=18,
+            # minZoom=6, maxZoom=18,  # optioneel
         ))
 
     return layers

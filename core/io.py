@@ -9,10 +9,14 @@ import orjson
 import pandas as pd
 import streamlit as st
 
+# pandas copy-on-write voorkomt verborgen kopieën bij bewerkingen
+pd.set_option("mode.copy_on_write", True)
+
 from .config import (
     LAYER_CFG,
     DATA_CSV_PATH,
     DATA_CSV_URL,
+    H3_RES12_GROUPED_PATH,
     ENERGIEARMOEDE_PATH,
     KOOPWONINGEN_PATH,
     WOONCORPORATIE_PATH,
@@ -24,8 +28,7 @@ from .config import (
 # ============================================================
 # GeoJSON loader (met property-filter & coördinaat-precisie)
 # ============================================================
-
-@st.cache_data(show_spinner=False)
+@st.cache_data(show_spinner=False, max_entries=8, ttl=86400)
 def load_geojson(path: str | Path, keep_props=None, coord_precision: int = 3, ttl=3600):
     """
     Laadt een GeoJSON-bestand als dict.
@@ -38,10 +41,7 @@ def load_geojson(path: str | Path, keep_props=None, coord_precision: int = 3, tt
     if not p.exists():
         return None
 
-    if p.suffix == ".gz":
-        raw = gzip.open(p, "rb").read()
-    else:
-        raw = p.read_bytes()
+    raw = gzip.open(p, "rb").read() if p.suffix == ".gz" else p.read_bytes()
 
     try:
         gj = orjson.loads(raw)
@@ -73,6 +73,7 @@ def load_geojson(path: str | Path, keep_props=None, coord_precision: int = 3, tt
 
     return {"type": "FeatureCollection", "features": feats}
 
+
 # ============================================================
 # Google download cache-map voor externe downloads
 # ============================================================
@@ -88,9 +89,8 @@ def _is_gdrive(url: str) -> bool:
     return ("drive.google.com" in u) or ("docs.google.com" in u)
 
 def _extract_gdrive_file_id(url: str) -> str | None:
-    # vangt zowel ?id=FILE_ID als /file/d/FILE_ID/ varianten
     m = re.search(r"[?&]id=([a-zA-Z0-9_-]{10,})", url)
-    if m: 
+    if m:
         return m.group(1)
     m = re.search(r"/file/d/([a-zA-Z0-9_-]{10,})", url)
     if m:
@@ -108,7 +108,6 @@ def _gdrive_to_cache(url: str, filename_hint: str = "data_kWh.csv") -> Path:
     if not file_id:
         raise ValueError(f"Kon geen Google Drive file-id vinden in URL: {url}")
 
-    # behoud extensie van hint (bv. .csv)
     suffix = Path(filename_hint).suffix or ".csv"
     cache_path = CACHE_DIR / f"gdrive_{file_id}{suffix}"
 
@@ -117,63 +116,101 @@ def _gdrive_to_cache(url: str, filename_hint: str = "data_kWh.csv") -> Path:
 
     return cache_path
 
-# ===== Data loaders =====
-@st.cache_data(show_spinner=False)
+
+# ============================================================
+# Data loader (RAM-geoptimaliseerd)
+# ============================================================
+@st.cache_data(show_spinner=False, max_entries=1)
 def load_data(src: str | Path | None = None, ttl=3600) -> pd.DataFrame:
     """
-    Laadt CSV/Parquet uit:
-      - Google Drive URL  -> download 1x naar cache (gdown), lees lokaal
-      - Overige http(s)   -> pandas leest direct
-      - Lokaal pad        -> pandas leest lokaal
-    Als src None is: gebruik DATA_CSV_URL (secrets) of fallback naar DATA_CSV_PATH.
-    Past daarna dezelfde kolom/dtype-opschoning toe als je monolith.
+    Laadt CSV/Parquet:
+      - Parquet eerst (sneller + zuiniger)
+      - CSV met pyarrow-engine (RAM vriendelijk)
+      - Converteert kolommen naar compacte types (float32/int32/category)
     """
-    # 0) Bron bepalen en valideren (met fallback-logic)
+    # ---------- Bron bepalen ----------
     if src is None or (isinstance(src, (str, Path)) and str(src).strip() == ""):
-        local_parquet = DATA_CSV_PATH.with_suffix(".parquet") if hasattr(DATA_CSV_PATH, "with_suffix") else None
-
-        if local_parquet and Path(local_parquet).exists():
-            src = local_parquet  # eerst lokaal Parquet
-        elif DATA_CSV_PATH.exists():
-            src = DATA_CSV_PATH  # dan lokaal CSV
+        use_compact = os.getenv("WARMTE_USE_COMPACT", "").strip().lower() in {"1", "true", "yes"}
+        compact_candidate = DATA_CSV_PATH.parent / "data_kWh_compact.parquet"
+        if use_compact and compact_candidate.exists():
+            src = compact_candidate
         else:
-            src = DATA_CSV_URL   # laatste optie: online CSV
-            
+            local_parquet = DATA_CSV_PATH.with_suffix(".parquet")
+            if local_parquet.exists():
+                src = local_parquet
+            elif DATA_CSV_PATH.exists():
+                src = DATA_CSV_PATH
+            else:
+                src = DATA_CSV_URL
 
-    # 1) URL of lokaal pad bepalen
+    # ---------- Download als URL ----------
     if isinstance(src, (str, Path)) and _is_url(str(src)):
         s = str(src)
-        if _is_gdrive(s):
-            local_path = _gdrive_to_cache(s, filename_hint="data_kWh.csv")
-            read_target = local_path
-        else:
-            read_target = s
+        read_target = _gdrive_to_cache(s) if _is_gdrive(s) else s
     else:
         read_target = Path(src)
 
-    # 2) Inlezen
+    # ---------- Kolommen & dtypes ----------
+    usecols = [
+        "aantal_VBOs", "totale_oppervlakte", "woonplaats", "Energieklasse",
+        "latitude", "longitude", "bouwjaar", "pandstatus",
+        "kWh_per_m2", "gemiddeld_jaarverbruik", "Dataset", "gemiddeld_jaarverbruik_mWh"
+    ]
+
+    csv_dtypes = {
+        "aantal_VBOs": "Int32",
+        "totale_oppervlakte": "Int32",
+        "bouwjaar": "Int32",
+        "gemiddeld_jaarverbruik": "float32",
+        "gemiddeld_jaarverbruik_mWh": "float32",
+        "kWh_per_m2": "float32",
+        "latitude": "float32",
+        "longitude": "float32",
+    }
+
+    # ---------- Inlezen ----------
     target_str = str(read_target).lower()
     if target_str.endswith(".parquet"):
-        df = pd.read_parquet(read_target)
+        df = pd.read_parquet(read_target, columns=usecols, engine="pyarrow")
     else:
         try:
-            df = pd.read_csv(read_target, engine="pyarrow")
+            df = pd.read_csv(
+                read_target,
+                engine="pyarrow",
+                dtype=csv_dtypes,
+                usecols=usecols,
+            )
         except Exception:
-            df = pd.read_csv(read_target, low_memory=False)
+            df = pd.read_csv(read_target, low_memory=False, usecols=usecols)
 
-    # 3) Dtypes/opschonen (ongewijzigd)
-    cols_num_int = [
-        "aantal_VBOs",
-        "totale_oppervlakte",
-        "bouwjaar",
-        "gemiddeld_jaarverbruik",
-        "gemiddeld_jaarverbruik_mWh",
-    ]
-    for c in cols_num_int:
+    # ---------- Numerieke types afdwingen ----------
+    for c in ["latitude", "longitude", "kWh_per_m2", "gemiddeld_jaarverbruik_mWh"]:
         if c in df.columns:
-            df[c] = pd.to_numeric(df[c], errors="coerce")
+            df[c] = pd.to_numeric(df[c], errors="coerce").astype("float32")
 
-    for c in ["kWh_per_m2", "latitude", "longitude"]:
+    for c in ["aantal_VBOs", "totale_oppervlakte", "bouwjaar"]:
+        if c in df.columns:
+            df[c] = pd.to_numeric(df[c], errors="coerce").astype("Int32")
+
+    # ---------- RAM reductie ----------
+    # Strings -> categories (strenger: pas bij veel herhaling)
+    for c in df.select_dtypes(include=["object"]).columns:
+        try:
+            nunique = df[c].nunique(dropna=True)
+            if nunique and nunique <= 10000:
+                if nunique <= 0.35 * len(df):  # strenger dan default
+                    df[c] = df[c].astype("category")
+        except Exception:
+            pass
+
+    if "pandstatus" in df.columns:
+        valid_statuses = {"Pand in gebruik"}
+        mask = df["pandstatus"].astype(str).isin(valid_statuses)
+        df = df.loc[mask].reset_index(drop=True)
+        df["pandstatus"] = df["pandstatus"].astype("category")
+
+    # ---------- Extra safety ----------
+    for c in ["lat", "lon"]:
         if c in df.columns:
             df[c] = pd.to_numeric(df[c], errors="coerce").astype("float32")
 
@@ -181,10 +218,9 @@ def load_data(src: str | Path | None = None, ttl=3600) -> pd.DataFrame:
 
 
 # ============================================================
-# Convenience: alle themalagen vooraf laden (exacte keep_props)
+# Convenience: alle themalagen vooraf laden
 # ============================================================
-
-@st.cache_data(show_spinner=False)
+@st.cache_data(show_spinner=False, max_entries=2, ttl=86400)
 def preload_geo_layers(ttl=3600):
     """
     Laadt alle geojson-lagen zoals in de monolith gedaan werd, met identieke keep_props.
@@ -223,3 +259,27 @@ def preload_geo_layers(ttl=3600):
         "water": gj_water,
     }
 
+
+@st.cache_data(show_spinner=False, max_entries=2)
+def load_precomputed_h3_grouped(ttl=3600) -> pd.DataFrame | None:
+    """
+    Laadt het pre-geaggregeerde H3-bestand indien aanwezig.
+    """
+    if not H3_RES12_GROUPED_PATH.exists():
+        return None
+    df = pd.read_parquet(H3_RES12_GROUPED_PATH)
+
+    for col in ["woonplaats", "Energieklasse", "Dataset"]:
+        if col in df.columns:
+            try:
+                df[col] = df[col].astype("category")
+            except Exception:
+                pass
+
+    for col in ["sum_mwh", "sum_area", "sum_kwh", "sum_vbos", "sum_lat", "sum_lon", "sum_bouwjaar"]:
+        if col in df.columns:
+            df[col] = pd.to_numeric(df[col], errors="coerce").astype("float32")
+    if "cnt" in df.columns:
+        df["cnt"] = pd.to_numeric(df["cnt"], errors="coerce").astype("int32")
+
+    return df

@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from typing import Dict, Any, Tuple, List
 
+import numpy as np
 import pandas as pd
 import streamlit as st
 
@@ -16,14 +17,15 @@ from core.utils import (
     text_input_int,
 )
 
-
+# ---------------------------
+# Kleine helpers (RAM-zuinig)
+# ---------------------------
 def _fillna_categorical(df_in: pd.DataFrame, col: str, value: str = "Onbekend") -> pd.DataFrame:
-    """Veilige NA -> 'Onbekend' voor categoricals (exact gedrag monolith)."""
+    """Veilige NA -> 'Onbekend' voor categoricals zonder onnodige kopieën."""
     if col not in df_in.columns:
         return df_in
     s = df_in[col]
     try:
-        import pandas as pd  # local ref
         from pandas.api.types import CategoricalDtype
         is_cat = isinstance(s.dtype, CategoricalDtype)
     except Exception:
@@ -34,8 +36,8 @@ def _fillna_categorical(df_in: pd.DataFrame, col: str, value: str = "Onbekend") 
             s = s.cat.add_categories([value])
         s = s.fillna(value)
     else:
+        # cast naar category pas ná fill (voorkomt dubbele alloc)
         s = s.fillna(value).astype("category")
-    df_in = df_in.copy()
     df_in[col] = s
     return df_in
 
@@ -46,17 +48,10 @@ def _render_big_legend(current_threshold: int):
             .legend {{
                 background: white; padding: 10px; border-radius: 8px;
                 font-family: Arial, sans-serif; font-size: 12px; color: black;
-                box-shadow: 0px 0px 0px rgba(0,0,0,0.3); border: 1px solid #e5e5e5;
-                margin-bottom: 15px;
+                border: 1px solid #e5e5e5; margin-bottom: 15px;
             }}
-            .legend-title {{
-                font-weight: bold;
-                margin-bottom: 10px;
-                display: block;
-            }}
-            .color-box {{
-                width: 15px; height: 15px; display: inline-block; margin-right: 5px;
-            }}
+            .legend-title {{ font-weight: bold; margin-bottom: 10px; display: block; }}
+            .color-box {{ width: 15px; height: 15px; display: inline-block; margin-right: 5px; }}
         </style>
         <div class="legend">
             <div class="legend-title">
@@ -93,12 +88,8 @@ def _render_bodem_legend(show_spoor: bool, show_water: bool):
         background:#fff; border:1px solid #e5e7eb; border-radius:12px;
         padding:10px; font-family:Arial; font-size:12px; margin-bottom:20px;
         box-shadow: 0 1px 0 rgba(0,0,0,0.03);
-        transition: all .15s ease;
     }}
-    .ea-legend-wide {{
-        padding:14px 16px; font-size:13px;
-        border-width: 1.5px;
-    }}
+    .ea-legend-wide {{ padding:14px 16px; font-size:13px; border-width: 1.5px; }}
     .ea-row {{ display:flex; align-items:center; margin:6px 0; }}
     .ea-line {{ width:30px; height:3px; display:inline-block; margin-right:8px; border-radius:2px; }}
     .ea-box  {{ width:16px; height:12px; display:inline-block; margin-right:8px; border-radius:3px; }}
@@ -112,19 +103,20 @@ def _render_bodem_legend(show_spoor: bool, show_water: bool):
     st.markdown(html, unsafe_allow_html=True)
 
 
+# ---------------------------
+# Hoofdfunctie
+# ---------------------------
 def build_sidebar(df_in: pd.DataFrame) -> Tuple[pd.DataFrame, Dict[str, Any]]:
     """
     Bouwt de volledige sidebar en retourneert:
-      - df (gefilterd zoals in de monolith)
+      - df (gefilterd)
       - ui (dict met alle gekozen waarden)
+    RAM-zuinig: minimaliseer kopieën en reken met binaire masks i.p.v. df-kettingen.
     """
     st.session_state.setdefault("grenswaarde_input", 100)
-    if "participatie" not in st.session_state:
-        st.session_state["participatie"] = 80
-    if "LAYER_CFG" not in st.session_state:
-        st.session_state.LAYER_CFG = LAYER_CFG
-    if "BASEMAP_CFG" not in st.session_state:
-        st.session_state.BASEMAP_CFG = BASEMAP_CFG
+    st.session_state.setdefault("participatie", 80)
+    st.session_state.setdefault("LAYER_CFG", LAYER_CFG)
+    st.session_state.setdefault("BASEMAP_CFG", BASEMAP_CFG)
 
     ui: Dict[str, Any] = {}
 
@@ -133,35 +125,20 @@ def build_sidebar(df_in: pd.DataFrame) -> Tuple[pd.DataFrame, Dict[str, Any]]:
 
         # ---------------- Kaart ----------------
         with st.expander("Kaart", expanded=True):
-            # ui["hide_basemap"] = st.toggle("Geen achtergrondkaart", value=False, key="hide_basemap")
-
-            #basemap_keys = list(st.session_state.BASEMAP_CFG.keys())
-            #default_key = "light" if "light" in st.session_state.BASEMAP_CFG else basemap_keys[0]
-            #ui["map_style"] = st.selectbox(
-            #    "Kies een kaartstijl:",
-            #    options=basemap_keys,
-            #    index=basemap_keys.index(default_key),
-            #    format_func=lambda k: st.session_state.BASEMAP_CFG[k]["title"],
-            #    key="map_style"
-            #)
-
             ui["zoom_level"] = st.slider("Selecteer zoomniveau", min_value=9, max_value=12, value=10)
             ui["resolution"] = get_dynamic_resolution(ui["zoom_level"])
             hexagon_size = get_hexagon_size(ui["zoom_level"])
-
             st.markdown(
                 f"<span style='font-size: 12px;'>Bij <b>zoomniveau {ui['zoom_level']}</b> is de kaart <b>ongeveer {hexagon_size} km breed</b>.</span>",
                 unsafe_allow_html=True
             )
-
             with st.expander("Uitleg over zoomniveau"):
                 st.write(
                     "Het zoomniveau bepaalt de mate van detail op de kaart:\n"
                     "- **9 en 10**: Specifieke buurten en industriegebieden zijn herkenbaar voor heel Friesland. \n"
                     "- **11 en 12**: Straatniveau. Vanaf dit niveau kan de volledige dataset worden gefilterd op woonplaats. \n\n"
-                    "Deze zoomniveaus zijn gebaseerd op de documentatie van [Mapbox](https://docs.mapbox.com/help/glossary/zoom-level/)."
+                    "Deze zoomniveaus zijn gebaseerd op de documentatie van Mapbox."
                 )
-
             ui["extruded"] = st.toggle("3D Weergave", value=False, key="extruded")
 
         # ---------------- Lagen ----------------
@@ -194,17 +171,7 @@ def build_sidebar(df_in: pd.DataFrame) -> Tuple[pd.DataFrame, Dict[str, Any]]:
             st.subheader("Woonlagen")
             show_energiearmoede = st.toggle("Energiearmoede", value=False, key=LAYER_CFG["energiearmoede"]["toggle_key"])
             if show_energiearmoede:
-                c = LAYER_CFG["energiearmoede"]; colors = legend_colors = None
-                colors = legend_colors = None
-                colors = legend_colors = None  # safeguard
-                colors = colors or legend_colors  # noop
-                colors = legend_colors = None  # reset
-                colors = legend_colors = None
-                colors = legend_colors = None
-                # echte call:
-                colors = legend_colors = None
-                # kort en goed:
-                c = LAYER_CFG["energiearmoede"]; colors = None
+                c = LAYER_CFG["energiearmoede"]
                 from core.utils import get_layer_colors
                 colors = get_layer_colors(c)
                 labels = legend_labels_from_breaks(c["breaks"])
@@ -224,28 +191,43 @@ def build_sidebar(df_in: pd.DataFrame) -> Tuple[pd.DataFrame, Dict[str, Any]]:
                 labels_wc = legend_labels_from_breaks(c["breaks"])
                 render_mini_legend(c["legend_title"], colors, labels_wc)
 
-            ui["extra_opacity"] = st.slider("Transparantie woonlagen", min_value=0.1, max_value=1.0, value=0.55, key="extra_opacity")
+            if show_energiearmoede or show_koopwoningen or show_corporatie:
+                ui["extra_opacity"] = st.slider(
+                    "Transparantie woonlagen",
+                    min_value=0.1,
+                    max_value=1.0,
+                    value=st.session_state.get("extra_opacity", 0.55),
+                    key="extra_opacity"
+                )
+            else:
+                ui["extra_opacity"] = st.session_state.setdefault("extra_opacity", 0.55)
 
             # Bodemlagen
             st.subheader("Bodemlagen")
             ui["show_spoorlaag"] = st.toggle("Spoorlaag", value=False, key=LAYER_CFG["spoordeel"]["toggle_key"])
-            ui["show_waterlaag"] = st.toggle("Waterlaag", value=False, key=LAYER_CFG["waterdeel"]["toggle_key"])
+            if ui["show_spoorlaag"]:
+                ui["spoor_opacity"] = st.slider("Transparantie spoorlaag", 0.1, 1.0, 0.5, key="spoor_opacity")
 
-            ui["spoor_opacity"] = st.slider("Transparantie spoorlaag", 0.1, 1.0, 0.5, key="spoor_opacity")
-            ui["water_opacity"] = st.slider("Transparantie waterlaag", 0.1, 1.0, 0.6, key="water_opacity")
+            ui["show_waterlaag"] = st.toggle("Waterlaag", value=False, key=LAYER_CFG["waterdeel"]["toggle_key"])
+            if ui["show_waterlaag"]:
+                ui["water_opacity"] = st.slider("Transparantie waterlaag", 0.1, 1.0, 0.6, key="water_opacity")
 
             _render_bodem_legend(ui["show_spoorlaag"], ui["show_waterlaag"])
 
         # ---------------- Filters ----------------
         with st.expander("Filters", expanded=False):
+            # Werk met één boolean mask i.p.v. herhaaldelijk df=df[...]
+            df = df_in  # Copy-on-write staat aan in io.py; masken zijn zuinig
+
             # Woonplaats
             st.subheader("Woonplaats")
-            df = df_in.copy()
-            woonplaatsen = df["woonplaats"].dropna().unique()
+            woonplaatsen = df["woonplaats"].dropna().unique().tolist()
+
             if 1 <= ui["zoom_level"] <= 10:
-                friesland_woonplaatsen = df["woonplaats"].unique()
-                df = df[df["woonplaats"].isin(friesland_woonplaatsen)]
-                woonplaats_selectie = friesland_woonplaatsen.tolist()
+                # op lager zoomniveau: Friesland geheel, geen multiselect nodig
+                friesland_woonplaatsen = df["woonplaats"].dropna().unique().tolist()
+                woonplaats_selectie = friesland_woonplaatsen
+                mask_wp = df["woonplaats"].isin(woonplaats_selectie)
             else:
                 woonplaats_selectie = st.multiselect(
                     "Filter op woonplaats:",
@@ -255,37 +237,42 @@ def build_sidebar(df_in: pd.DataFrame) -> Tuple[pd.DataFrame, Dict[str, Any]]:
                 if not woonplaats_selectie:
                     st.warning("Selecteer minimaal één woonplaats.")
                     woonplaats_selectie = ["Leeuwarden"]
-                df = df[df["woonplaats"].isin(woonplaats_selectie)]
+                mask_wp = df["woonplaats"].isin(woonplaats_selectie)
+
             ui["woonplaats_selectie"] = woonplaats_selectie
+            df = df[mask_wp]
 
             # Energieklasse
             st.subheader("Energieklasse")
             df = _fillna_categorical(df, "Energieklasse", "Onbekend")
-            energieklassen = df["Energieklasse"].unique()
+            energieklassen = df["Energieklasse"].cat.categories if hasattr(df["Energieklasse"], "cat") else sorted(df["Energieklasse"].dropna().unique())
             energieklasse_selectie = st.multiselect(
                 "Filter op energieklasse:",
-                options=sorted([str(x) for x in energieklassen]),
+                options=[str(x) for x in energieklassen],
                 default=[str(x) for x in energieklassen]
             )
             if not energieklasse_selectie:
                 energieklasse_selectie = [str(x) for x in energieklassen]
-            df = df[df["Energieklasse"].astype(str).isin(energieklasse_selectie)]
+            mask_en = df["Energieklasse"].astype(str).isin(energieklasse_selectie)
+            df = df[mask_en]
             ui["energieklasse_selectie"] = energieklasse_selectie
 
             # Bouwjaar
             st.subheader("Bouwjaar")
-            min_year = int(pd.to_numeric(df["bouwjaar"], errors="coerce").min())
-            max_year = int(pd.to_numeric(df["bouwjaar"], errors="coerce").max())
-            bouwjaar_range = st.slider("Filter op bouwjaar:", min_year, max_year, (min_year, max_year))
-            df = df[(pd.to_numeric(df["bouwjaar"], errors="coerce") >= bouwjaar_range[0]) &
-                    (pd.to_numeric(df["bouwjaar"], errors="coerce") <= bouwjaar_range[1])]
-            ui["bouwjaar_range"] = bouwjaar_range
+            # Gebruik NumPy voor min/max zonder kopieën
+            bouwjaar_num = pd.to_numeric(df["bouwjaar"], errors="coerce")
+            min_year = int(np.nanmin(bouwjaar_num.to_numpy()))
+            max_year = int(np.nanmax(bouwjaar_num.to_numpy()))
+            by_lo, by_hi = st.slider("Filter op bouwjaar:", min_year, max_year, (min_year, max_year))
+            mask_by = (bouwjaar_num >= by_lo) & (bouwjaar_num <= by_hi)
+            df = df[mask_by]
+            ui["bouwjaar_range"] = (by_lo, by_hi)
 
             # Type pand
             st.subheader("Type pand")
             df = _fillna_categorical(df, "Dataset", "Onbekend")
-            typepand = sorted([str(x) for x in df["Dataset"].unique()])
-            typepand_opties = ["Alle types"] + typepand
+            typepand = [str(x) for x in (df["Dataset"].cat.categories if hasattr(df["Dataset"], "cat") else df["Dataset"].dropna().unique())]
+            typepand_opties = ["Alle types"] + sorted(typepand)
             pand_selectie = st.selectbox("Selecteer type pand:", options=typepand_opties)
             if pand_selectie != "Alle types":
                 df = df[df["Dataset"].astype(str) == pand_selectie]
@@ -310,18 +297,41 @@ def build_sidebar(df_in: pd.DataFrame) -> Tuple[pd.DataFrame, Dict[str, Any]]:
             ui["participatie"] = st.session_state.participatie
 
         # ---------------- Collectieve warmtevoorziening (analyse) ----------------
-        with st.sidebar.expander("Collectieve warmtevoorziening (analyse)", expanded=False):
-            ui["show_sites_layer"] = st.toggle("Warmtevoorzieningen", value=False, key="show_sites_layer")
-            ui["kring_radius"] = st.slider("Bereik van de warmtevoorziening", 1, 5, 3, 1, key="kring_radius")
-            ui["min_sep"] = st.slider("Minimale afstand tussen warmtevoorzieningen", 1, 5, 3, 1, key="min_sep")
-            ui["n_sites"] = st.number_input("Aantal collectieve warmtevoorzieningen", min_value=1, max_value=5, value=3, step=1, key="n_sites")
+        selected_places_prior = ui.get("woonplaats_selectie") or st.session_state.get("woonplaats_selectie", [])
+        can_analyse = (ui["zoom_level"] >= 11) and bool(selected_places_prior)
+        info_html = "<p style='font-size:12px; color:#6b7280; margin-bottom:8px;'>Analyse alleen beschikbaar bij zoomniveau 11 en 12.</p>"
 
-            ui["cap_mwh"] = text_input_int("Capaciteit per voorziening (MWh)", key="cap_mwh", default=100_000)
-            ui["cap_buildings"] = text_input_int("Max gebouwen per voorziening", key="cap_buildings", default=1_000)
-            ui["fixed_cost"] = text_input_int("Vaste kosten per locatie (€)", key="fixed_cost", default=25_000)
-            ui["var_cost"] = text_input_int("Variabele kosten (€ per MWh)", key="var_cost", default=35)
+        with st.expander("Collectieve warmtevoorziening (analyse)", expanded=False):
+            compute_sites = False
+            if not can_analyse:
+                st.markdown(info_html, unsafe_allow_html=True)
+                ui["show_sites_layer"] = False
+                st.session_state["show_sites_layer"] = False
+            else:
+                st.markdown(info_html, unsafe_allow_html=True)
+                ui["show_sites_layer"] = st.toggle(
+                    "Warmtevoorzieningen",
+                    value=False,
+                    key="show_sites_layer"
+                )
 
-            ui["opex_pct"] = st.number_input("Extra operationele kosten (% van vaste kosten)", min_value=0, max_value=100, value=10, step=1, key="opex_pct")
+                if ui["show_sites_layer"]:
+                    if not st.session_state.get("sites_ready"):
+                        st.info("Toon warmtevoorzieningen wanneer kaart zichtbaar is.")
+                    compute_sites = st.button("Bereken warmtevoorzieningen", key="compute_sites_button")
+
+                    ui["kring_radius"] = st.slider("Bereik van de warmtevoorziening", 1, 5, 3, 1, key="kring_radius")
+                    ui["min_sep"] = st.slider("Minimale afstand tussen warmtevoorzieningen", 1, 5, 3, 1, key="min_sep")
+                    ui["n_sites"] = st.number_input("Aantal collectieve warmtevoorzieningen", min_value=1, max_value=5, value=3, step=1, key="n_sites")
+
+                    ui["cap_mwh"] = text_input_int("Capaciteit per voorziening (MWh)", key="cap_mwh", default=100_000)
+                    ui["cap_buildings"] = text_input_int("Max gebouwen per voorziening", key="cap_buildings", default=1_000)
+                    ui["fixed_cost"] = text_input_int("Vaste kosten per locatie (€)", key="fixed_cost", default=25_000)
+                    ui["var_cost"] = text_input_int("Variabele kosten (€ per MWh)", key="var_cost", default=35)
+
+                    ui["opex_pct"] = st.number_input("Extra operationele kosten (% van vaste kosten)", min_value=0, max_value=100, value=10, step=1, key="opex_pct")
+
+            ui["compute_sites"] = compute_sites
 
         # ---------------- Uitleg-blokken ----------------
         st.header("Uitleg")
@@ -330,7 +340,7 @@ def build_sidebar(df_in: pd.DataFrame) -> Tuple[pd.DataFrame, Dict[str, Any]]:
                      "Elke hexagoon krijgt een unieke ID en bevat gegevens over de warmtebehoefte.")
 
         with st.expander("Uitleg analyse", expanded=False):
-            st.markdown("""
+            st.markdown("""\
 **Doel van de analyse**  
 De analyse laat zien waar een **collectieve warmtevoorziening** (zoals een buurtbron of warmtenet) kansrijk kan zijn. Dit gebeurt door te kijken hoeveel energie en gebouwen er binnen de directe omgeving van een mogelijke locatie liggen en of deze plek past binnen de capaciteit van een voorziening.
 
@@ -347,6 +357,6 @@ De analyse laat zien waar een **collectieve warmtevoorziening** (zoals een buurt
 **Verschil tussen deze twee**  
 - De *k-ring* bepaalt hoe ver er wordt gekeken om te berekenen hoeveel gebouwen en energie bij één locatie horen (de invloedsstraal van een plek).  
 - De *minimale afstand* zorgt ervoor dat twee geselecteerde voorzieningen niet te dicht naast elkaar komen te liggen (de spreiding tussen verschillende plekken).  
-            """)
+""")
 
     return df, ui

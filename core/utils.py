@@ -1,9 +1,12 @@
 # core/utils.py
+from __future__ import annotations
+
 import json
 import hashlib
-from pathlib import Path
+from functools import lru_cache
+from typing import List, Dict, Any
 
-import matplotlib
+from pathlib import Path
 import pandas as pd
 import streamlit as st
 
@@ -11,23 +14,41 @@ import streamlit as st
 # Kleuren & legenda
 # ============================================================
 
-def get_color_palette(palette_name="OrRd", n=4, alpha=180):
+def _lazy_matplotlib():
     """
-    Returns an RGBA list of length n from a given colormap name (e.g. 'Greens', 'Purples', 'OrRd').
-    Alpha is 0–255.
+    Laadt matplotlib pas wanneer we het écht nodig hebben (scheelt init-RAM/starttijd).
     """
-    cmap = matplotlib.colormaps.get_cmap(palette_name).resampled(n)
+    import importlib
+    mpl = importlib.import_module("matplotlib")
+    return mpl
+
+
+@lru_cache(maxsize=16)
+def _cached_palette(palette_name: str, n: int, alpha: int) -> List[List[int]]:
+    """
+    Kleine cache rond colormap → RGBA-lijst. Voorkomt herhaalde colormap-resolves.
+    """
+    mpl = _lazy_matplotlib()
+    cmap = mpl.colormaps.get_cmap(palette_name).resampled(max(1, n))
     colors = []
-    for i in range(n):
+    for i in range(max(1, n)):
         t = 0.0 if n == 1 else i / (n - 1)
         r, g, b, _ = cmap(t)
         colors.append([int(r * 255), int(g * 255), int(b * 255), int(alpha)])
     return colors
 
 
+def get_color_palette(palette_name="OrRd", n=4, alpha=180):
+    """
+    Returns an RGBA list of length n from a given colormap name (e.g. 'Greens', 'Purples', 'OrRd').
+    Alpha is 0–255. Lazy + cached.
+    """
+    return _cached_palette(str(palette_name), int(n), int(alpha))
+
+
 def get_layer_colors(layer_cfg: dict):
     """
-    Vul in palette name. Rekent automatisch uit welke kleur die moet pakken.
+    Maakt kleurenlijst o.b.v. layer-config (palette/breaks/n_colors/alpha).
     """
     return get_color_palette(
         palette_name=layer_cfg.get("palette", "OrRd"),
@@ -48,7 +69,7 @@ def _spoor_rgb_from_cfg(cfg: dict):
 
 
 def legend_labels_from_breaks(breaks):
-    pct = [int(b*100) for b in breaks]
+    pct = [int(b * 100) for b in breaks]
     return [f"< {pct[0]}%", f"{pct[0]}–{pct[1]}%", f"{pct[1]}–{pct[2]}%", f"≥ {pct[2]}%"]
 
 
@@ -109,16 +130,8 @@ def get_dynamic_line_width(zoom_level):
     """
     Wordt niet gebruikt maar wel handig voor later als je lijn diktes wilt aanpassen afhankelijk van het zoom niveau.
     """
-    if zoom_level >= 15:
-        return 0
-    elif 12 <= zoom_level <= 14:
-        return 0
-    elif 8 <= zoom_level < 12:
-        return 0
-    elif 7 <= zoom_level < 8:
-        return 0
-    else:
-        return 0
+    # Bewust 0 (geen stroke) om renderbuffers minimaal te houden.
+    return 0
 
 
 def get_hexagon_size(zoom_level):
@@ -150,9 +163,13 @@ def get_color(value):
     - Lichtoranje is tussen 10 en 50
     - Rood is boven 50
     """
+    try:
+        v = float(value)
+    except Exception:
+        return colorbrewer_colors[0]
     bins = [10, 50]
     for i, threshold in enumerate(bins):
-        if value < threshold:
+        if v < threshold:
             return colorbrewer_colors[i]
     return colorbrewer_colors[-1]
 
@@ -234,7 +251,7 @@ def pct_color_from_breaks(v, breaks, colors):
     return colors[-1]
 
 
-@st.cache_data(show_spinner=False)
+@st.cache_data(show_spinner=False, max_entries=24)
 def colorize_geojson_cached(gjson: dict, prop_name: str, out_prop: str, breaks: list, colors: list, layer_label: str = ""):
     """
     Schrijft per feature een RGBA in properties[out_prop] o.b.v. properties[prop_name].
@@ -242,11 +259,16 @@ def colorize_geojson_cached(gjson: dict, prop_name: str, out_prop: str, breaks: 
 
     Optimalisatie:
     - Geen deepcopy van geometrieën; shallow copy properties en bouw nieuwe features-array.
+    - Behoud minimale keys voor tooltip (buurt/gemeente + label + pct).
     """
-    if not gjson:
+    if not gjson or not isinstance(gjson, dict) or gjson.get("type") != "FeatureCollection":
         return gjson
+
     feats_new = []
-    for feat in gjson.get("features", []):
+    feats = gjson.get("features") or []
+    for feat in feats:
+        if not isinstance(feat, dict):
+            continue
         props = dict((feat.get("properties") or {}))  # shallow copy properties
         v = props.get(prop_name)
         props[out_prop] = pct_color_from_breaks(v, breaks, colors)
@@ -260,7 +282,10 @@ def colorize_geojson_cached(gjson: dict, prop_name: str, out_prop: str, breaks: 
         props["geo_section_display"]  = "block"
         props["hex_section_display"]  = "none"
         props["site_section_display"] = "none"
-        feats_new.append({"type": "Feature", "properties": props, "geometry": feat.get("geometry")})
+
+        geom = feat.get("geometry")  # geen diepe kopie
+        feats_new.append({"type": "Feature", "properties": props, "geometry": geom})
+
     return {"type": "FeatureCollection", "features": feats_new}
 
 
@@ -279,6 +304,7 @@ def text_input_int(label: str, key: str, default: int) -> int:
     val = parse_dutch_int(s, fallback=default)
     st.session_state[key] = val
     return val
+
 
 def build_deck_tooltip() -> dict:
     """
