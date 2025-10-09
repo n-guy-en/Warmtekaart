@@ -55,16 +55,16 @@ from ui.kpis_and_tables import render_kpis, render_tabs
 #    pass
 
 # TODO_RAMDEBUG: verwijder deze helper zodra RAM-diagnose is afgerond.
-#def _log_ram(label: str) -> None:
-#    try:
-#        import psutil, os  # noqa: F401  # hergebruik bestaande import
-#    except Exception:
-#        return
-#    try:
-#        mem_mb = psutil.Process(os.getpid()).memory_info().rss / 1e6
-#        print(f"[RAM_DEBUG] {label}: {mem_mb:.1f} MB")
-#    except Exception:
-#        pass
+def _log_ram(label: str) -> None:
+    try:
+        import psutil, os  # noqa: F401  # hergebruik bestaande import
+    except Exception:
+        return
+    try:
+        mem_mb = psutil.Process(os.getpid()).memory_info().rss / 1e6
+        print(f"[RAM_DEBUG] {label}: {mem_mb:.1f} MB")
+    except Exception:
+        pass
 
 # ========== Eerste init (NIET cache leegmaken) ==========
 if "app_initialized" not in st.session_state:
