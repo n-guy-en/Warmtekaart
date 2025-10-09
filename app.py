@@ -54,6 +54,12 @@ from core.io import load_geojson, load_data  # centrale loaders
 from ui.sidebar import build_sidebar
 from ui.kpis_and_tables import render_kpis, render_tabs
 
+# Reset cache and session if Streamlit restarted fresh
+if not st.session_state.get("app_initialized"):
+    st.cache_data.clear()
+    st.session_state.clear()
+    st.session_state["app_initialized"] = True
+
 # RAM fix
 def _periodic_cache_clear(interval_min: int = 30):
     """Leeg de Streamlit cache elke `interval_min` minuten in een achtergrondthread."""
@@ -427,6 +433,11 @@ if st.session_state.show_map:
     # Indicatieve aandachtslaag
     df_filtered_area = df_filtered.copy()
     df_filtered_area["indicatief_aandachtsgebied"] = df_filtered_area["kWh_per_m2"] > threshold
+
+    #  Limit hex cells naar PyDeck --> protect RAM and browser performance
+    MAX_HEX = 40000  # lower to 40000 on small hosts (RAM < 1GB)
+    if len(df_filtered) > MAX_HEX:
+        df_filtered = df_filtered.nlargest(MAX_HEX, "gemiddeld_jaarverbruik_mWh")
 
     # --------- Warmtevoorziening (alleen als toggle aan) ---------
     if ui["show_sites_layer"]:
