@@ -47,24 +47,24 @@ from ui.sidebar import build_sidebar
 from ui.kpis_and_tables import render_kpis, render_tabs
 
 # (optioneel) live RAM-meting in sidebar
-try:
-    import psutil, os
-    mem = psutil.Process(os.getpid()).memory_info().rss / 1e6
-    st.sidebar.write(f"RAM-gebruik: {mem:.1f} MB")
-except Exception:
-    pass
+#try:
+#    import psutil, os
+#    mem = psutil.Process(os.getpid()).memory_info().rss / 1e6
+#    st.sidebar.write(f"RAM-gebruik: {mem:.1f} MB")
+#except Exception:
+#    pass
 
 # TODO_RAMDEBUG: verwijder deze helper zodra RAM-diagnose is afgerond.
-def _log_ram(label: str) -> None:
-    try:
-        import psutil, os  # noqa: F401  # hergebruik bestaande import
-    except Exception:
-        return
-    try:
-        mem_mb = psutil.Process(os.getpid()).memory_info().rss / 1e6
-        print(f"[RAM_DEBUG] {label}: {mem_mb:.1f} MB")
-    except Exception:
-        pass
+#def _log_ram(label: str) -> None:
+#    try:
+#        import psutil, os  # noqa: F401  # hergebruik bestaande import
+#    except Exception:
+#        return
+#    try:
+#        mem_mb = psutil.Process(os.getpid()).memory_info().rss / 1e6
+#        print(f"[RAM_DEBUG] {label}: {mem_mb:.1f} MB")
+#    except Exception:
+#        pass
 
 # ========== Eerste init (NIET cache leegmaken) ==========
 if "app_initialized" not in st.session_state:
@@ -116,6 +116,8 @@ st.session_state.setdefault("show_map", False)
 st.session_state.setdefault("sites", [])
 st.session_state.setdefault("sites_costed", [])
 st.session_state.setdefault("sites_ready", False)
+
+st.session_state.setdefault("first_hint_shown", False)
 
 # ===== Helpers voor stabiele vergelijkingen =====
 def _as_sorted_list(x):
@@ -617,5 +619,13 @@ if st.session_state.show_map:
 
 else:
     with map_container:
-        st.info("Filters gewijzigd. Klik op 'Maak kaart' om de kaart bij te werken.")
-
+        # - Eerste keer openen → initiële instructie
+        # - Daarna, als filters gewijzigd zijn → update-instructie
+        # - Anders (nog niets gedaan) → neutrale instructie
+        if st.session_state.get("_map_dirty"):
+            st.info("Filters gewijzigd. Klik op 'Maak kaart' om de kaart bij te werken.")
+        elif not st.session_state.get("first_hint_shown", False):
+            st.info("Selecteer de gewenste filters. Klik op 'Maak kaart' om de kaart weer te geven.")
+            st.session_state["first_hint_shown"] = True
+        else:
+            st.info("Klik op 'Maak kaart' om de kaart weer te geven.")
