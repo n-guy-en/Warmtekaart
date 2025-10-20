@@ -12,6 +12,7 @@ from core.utils import (
     format_dutch_number,
     get_dynamic_resolution,
     get_hexagon_size,
+    get_layer_colors,
     legend_labels_from_breaks,
     render_mini_legend,
     text_input_int,
@@ -43,6 +44,7 @@ def _fillna_categorical(df_in: pd.DataFrame, col: str, value: str = "Onbekend") 
 
 
 def _render_big_legend(current_threshold: int):
+    """Render de hoofdlegenda voor de warmtevraaglaag."""
     legend_html = f"""
         <style>
             .legend {{
@@ -67,6 +69,7 @@ def _render_big_legend(current_threshold: int):
 
 
 def _render_bodem_legend(show_spoor: bool, show_water: bool):
+    """Toon de legenda voor spoor- en waterlagen wanneer deze actief zijn."""
     from core.utils import _spoor_rgb_from_cfg
     r_s, g_s, b_s = _spoor_rgb_from_cfg(st.session_state.LAYER_CFG)
     wc = st.session_state.LAYER_CFG["waterdeel"]["palette"]
@@ -111,7 +114,6 @@ def build_sidebar(df_in: pd.DataFrame) -> Tuple[pd.DataFrame, Dict[str, Any]]:
     Bouwt de volledige sidebar en retourneert:
       - df (gefilterd)
       - ui (dict met alle gekozen waarden)
-    RAM-zuinig: minimaliseer kopieën en reken met binaire masks i.p.v. df-kettingen.
     """
     st.session_state.setdefault("grenswaarde_input", 100)
     st.session_state.setdefault("participatie", 80)
@@ -136,8 +138,8 @@ def build_sidebar(df_in: pd.DataFrame) -> Tuple[pd.DataFrame, Dict[str, Any]]:
                 st.write(
                     "Het zoomniveau bepaalt de mate van detail op de kaart:\n"
                     "- **9 en 10**: Specifieke buurten en industriegebieden zijn herkenbaar voor heel Friesland. \n"
-                    "- **11 en 12**: Straatniveau. Vanaf dit niveau kan de volledige dataset worden gefilterd op woonplaats. \n\n"
-                    "Deze zoomniveaus zijn gebaseerd op de documentatie van Mapbox."
+                    "- **11 en 12**: Straatniveau. Vanaf dit niveau kan er worden gefilterd op gemeente en woonplaats. \n\n"
+                    "De zoomniveaus zijn afgestemd op de vaste resoluties van het H3-grid en op de gewenste weergave op de kaart."
                 )
             ui["extruded"] = st.toggle("3D Weergave", value=False, key="extruded")
 
@@ -172,21 +174,20 @@ def build_sidebar(df_in: pd.DataFrame) -> Tuple[pd.DataFrame, Dict[str, Any]]:
             show_energiearmoede = st.toggle("Energiearmoede", value=False, key=LAYER_CFG["energiearmoede"]["toggle_key"])
             if show_energiearmoede:
                 c = LAYER_CFG["energiearmoede"]
-                from core.utils import get_layer_colors
                 colors = get_layer_colors(c)
                 labels = legend_labels_from_breaks(c["breaks"])
                 render_mini_legend(c["legend_title"], colors, labels)
 
             show_koopwoningen = st.toggle("Koopwoningen", value=False, key=LAYER_CFG["koopwoningen"]["toggle_key"])
             if show_koopwoningen:
-                c = LAYER_CFG["koopwoningen"]; from core.utils import get_layer_colors
+                c = LAYER_CFG["koopwoningen"]
                 colors = get_layer_colors(c)
                 labels_kw = legend_labels_from_breaks(c["breaks"])
                 render_mini_legend(c["legend_title"], colors, labels_kw)
 
             show_corporatie = st.toggle("Wooncorporatie", value=False, key=LAYER_CFG["wooncorporatie"]["toggle_key"])
             if show_corporatie:
-                c = LAYER_CFG["wooncorporatie"]; from core.utils import get_layer_colors
+                c = LAYER_CFG["wooncorporatie"]
                 colors = get_layer_colors(c)
                 labels_wc = legend_labels_from_breaks(c["breaks"])
                 render_mini_legend(c["legend_title"], colors, labels_wc)
@@ -217,29 +218,72 @@ def build_sidebar(df_in: pd.DataFrame) -> Tuple[pd.DataFrame, Dict[str, Any]]:
         # ---------------- Filters ----------------
         with st.expander("Filters", expanded=False):
             # Werk met één boolean mask i.p.v. herhaaldelijk df=df[...]
-            df = df_in  # Copy-on-write staat aan in io.py; masken zijn zuinig
+            df = df_in  # Copy-on-write staat aan in io.py -> masken zijn zuinig
+
+            # Gemeente
+            st.subheader("Gemeente")
+            gemeente_selectie: List[str] = []
+            gemeente_changed = False
+            if "gemeentenaam" in df.columns:
+                gemeenten_series = df["gemeentenaam"]
+                if hasattr(gemeenten_series, "cat"):
+                    gemeente_opties = [str(x) for x in gemeenten_series.cat.categories]
+                else:
+                    gemeente_opties = sorted({str(x) for x in gemeenten_series.dropna().unique()})
+                prev_gemeente_selectie = st.session_state.get("_prev_gemeente_selectie", [])
+                gemeente_default = [g for g in prev_gemeente_selectie if g in gemeente_opties]
+                if not gemeente_default:
+                    if "Leeuwarden" in gemeente_opties:
+                        gemeente_default = ["Leeuwarden"]
+                    else:
+                        gemeente_default = gemeente_opties
+                gemeente_selectie = st.multiselect(
+                    "Filter op gemeente:",
+                    options=gemeente_opties,
+                    default=gemeente_default,
+                )
+                if not gemeente_selectie:
+                    st.warning("Selecteer minimaal één gemeente.")
+                    gemeente_selectie = gemeente_default or gemeente_opties
+                prev_gemeente_set = set(prev_gemeente_selectie or [])
+                current_gemeente_set = set(gemeente_selectie)
+                gemeente_changed = current_gemeente_set != prev_gemeente_set
+                st.session_state["_prev_gemeente_selectie"] = gemeente_selectie
+                mask_gemeente = gemeenten_series.astype(str).isin(gemeente_selectie)
+                df = df.loc[mask_gemeente]
+            ui["gemeente_selectie"] = gemeente_selectie
 
             # Woonplaats
             st.subheader("Woonplaats")
             woonplaatsen = df["woonplaats"].dropna().unique().tolist()
+            woonplaatsen_sorted = sorted(woonplaatsen)
 
             if 1 <= ui["zoom_level"] <= 10:
                 # op lager zoomniveau: Friesland geheel, geen multiselect nodig
-                friesland_woonplaatsen = df["woonplaats"].dropna().unique().tolist()
+                friesland_woonplaatsen = woonplaatsen_sorted
                 woonplaats_selectie = friesland_woonplaatsen
                 mask_wp = df["woonplaats"].isin(woonplaats_selectie)
             else:
+                prev_wp = st.session_state.get("woonplaats_selectie", [])
+                prev_wp_filtered = [wp for wp in prev_wp if wp in woonplaatsen_sorted]
+                if gemeente_changed and woonplaatsen_sorted:
+                    default_wp = woonplaatsen_sorted
+                else:
+                    default_wp = prev_wp_filtered
+                if not default_wp:
+                    default_wp = woonplaatsen_sorted or ["Leeuwarden"]
                 woonplaats_selectie = st.multiselect(
                     "Filter op woonplaats:",
-                    options=sorted(woonplaatsen),
-                    default=["Leeuwarden"]
+                    options=woonplaatsen_sorted,
+                    default=default_wp
                 )
                 if not woonplaats_selectie:
                     st.warning("Selecteer minimaal één woonplaats.")
-                    woonplaats_selectie = ["Leeuwarden"]
+                    woonplaats_selectie = woonplaatsen_sorted or ["Leeuwarden"]
                 mask_wp = df["woonplaats"].isin(woonplaats_selectie)
 
             ui["woonplaats_selectie"] = woonplaats_selectie
+            st.session_state["woonplaats_selectie"] = woonplaats_selectie
             df = df[mask_wp]
 
             # Energieklasse
@@ -259,7 +303,6 @@ def build_sidebar(df_in: pd.DataFrame) -> Tuple[pd.DataFrame, Dict[str, Any]]:
 
             # Bouwjaar
             st.subheader("Bouwjaar")
-            # Gebruik NumPy voor min/max zonder kopieën
             bouwjaar_num = pd.to_numeric(df["bouwjaar"], errors="coerce")
             min_year = int(np.nanmin(bouwjaar_num.to_numpy()))
             max_year = int(np.nanmax(bouwjaar_num.to_numpy()))
@@ -270,7 +313,6 @@ def build_sidebar(df_in: pd.DataFrame) -> Tuple[pd.DataFrame, Dict[str, Any]]:
 
             # Type pand
             st.subheader("Type pand")
-            df = _fillna_categorical(df, "Dataset", "Onbekend")
             typepand = [str(x) for x in (df["Dataset"].cat.categories if hasattr(df["Dataset"], "cat") else df["Dataset"].dropna().unique())]
             typepand_opties = ["Alle types"] + sorted(typepand)
             pand_selectie = st.selectbox("Selecteer type pand:", options=typepand_opties)
@@ -317,12 +359,26 @@ def build_sidebar(df_in: pd.DataFrame) -> Tuple[pd.DataFrame, Dict[str, Any]]:
 
                 if ui["show_sites_layer"]:
                     if not st.session_state.get("sites_ready"):
-                        st.info("Toon warmtevoorzieningen wanneer kaart zichtbaar is.")
+                        st.info("Stel eerst de filters in en zorg dat de kaart zichtbaar is om warmtevoorzieningen te tonen.")
                     compute_sites = st.button("Bereken warmtevoorzieningen", key="compute_sites_button")
 
-                    ui["kring_radius"] = st.slider("Bereik van de warmtevoorziening", 1, 5, 3, 1, key="kring_radius")
-                    ui["min_sep"] = st.slider("Minimale afstand tussen warmtevoorzieningen", 1, 5, 3, 1, key="min_sep")
-                    ui["n_sites"] = st.number_input("Aantal collectieve warmtevoorzieningen", min_value=1, max_value=5, value=3, step=1, key="n_sites")
+                    prev_kring = int(st.session_state.get("kring_radius", 3))
+                    if prev_kring > 5:
+                        prev_kring = 5
+                        st.session_state.kring_radius = prev_kring
+                    ui["kring_radius"] = st.slider("Bereik van de warmtevoorziening", 1, 5, prev_kring, 1, key="kring_radius")
+
+                    prev_min_sep = int(st.session_state.get("min_sep", 3))
+                    if prev_min_sep > 5:
+                        prev_min_sep = 5
+                        st.session_state.min_sep = prev_min_sep
+                    ui["min_sep"] = st.slider("Minimale afstand tussen warmtevoorzieningen", 1, 5, prev_min_sep, 1, key="min_sep")
+                    # Bewaar bestaande keuze maar klem deze binnen nieuwe grenzen
+                    prev_n_sites = int(st.session_state.get("n_sites", 3))
+                    if prev_n_sites > 20:
+                        prev_n_sites = 20
+                        st.session_state.n_sites = prev_n_sites
+                    ui["n_sites"] = st.number_input("Aantal collectieve warmtevoorzieningen", min_value=1, max_value=20, value=prev_n_sites, step=1, key="n_sites")
 
                     ui["cap_mwh"] = text_input_int("Capaciteit per voorziening (MWh)", key="cap_mwh", default=100_000)
                     ui["cap_buildings"] = text_input_int("Max gebouwen per voorziening", key="cap_buildings", default=1_000)
@@ -357,6 +413,11 @@ De analyse laat zien waar een **collectieve warmtevoorziening** (zoals een buurt
 **Verschil tussen deze twee**  
 - De *k-ring* bepaalt hoe ver er wordt gekeken om te berekenen hoeveel gebouwen en energie bij één locatie horen (de invloedsstraal van een plek).  
 - De *minimale afstand* zorgt ervoor dat twee geselecteerde voorzieningen niet te dicht naast elkaar komen te liggen (de spreiding tussen verschillende plekken).  
+
+**K-ring in de praktijk (k = 1 t/m 5)**  
+- **k = 1** – directe buren, circa 7 hexagonen. Denk aan een cluster van enkele panden binnen ~200 meter.  
+- **k = 3** – kleine buurt, ±37 hexagonen. Bestrijkt ongeveer een paar straten.  
+- **k = 5** – grotere buurt, ±91 hexagonen. Omvat een deelwijk of bedrijventerrein van enkele hectares.  
 """)
 
     return df, ui

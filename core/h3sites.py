@@ -202,8 +202,6 @@ def compute_clusters_cached(cache_key: str, df_hex_small: pd.DataFrame, k: int, 
     return sums
 
 
-
-
 # ============================================================
 # Selectie van sites (minimale afstand + capaciteit/benutting)
 # ============================================================

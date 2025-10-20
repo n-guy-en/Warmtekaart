@@ -2,16 +2,18 @@
 from __future__ import annotations
 
 # ========== Imports ==========
-import time
 import gc
+import math
 
 import h3
 import pandas as pd
 import pydeck as pdk
 import streamlit as st
 
-# ---- interne modules (uit deze repo) ----
+# ---- interne modules ----
 from core.config import (
+    BASE_H3_RES,
+    AVG_HA_BY_RES,
     LAYER_CFG,
     BASEMAP_CFG,
     ENERGIEARMOEDE_PATH,
@@ -33,7 +35,6 @@ from core.layers import (
     create_indicative_area_layer,
     create_site_layers,
     create_bodem_layers,
-    filter_geojson_by_selection,
     create_extra_layers,
 )
 from core.h3sites import (
@@ -42,7 +43,7 @@ from core.h3sites import (
     compute_clusters_cached,
     select_sites_from_clusters,
 )
-from core.io import load_geojson, load_data, load_precomputed_h3_grouped
+from core.io import load_geojson, load_data
 from ui.sidebar import build_sidebar
 from ui.kpis_and_tables import render_kpis, render_tabs
 
@@ -56,8 +57,10 @@ from ui.kpis_and_tables import render_kpis, render_tabs
 
 # TODO_RAMDEBUG: verwijder deze helper zodra RAM-diagnose is afgerond.
 def _log_ram(label: str) -> None:
+    """Log het huidige RAM-gebruik voor snelle diagnosestappen."""
     try:
-        import psutil, os  # noqa: F401  # hergebruik bestaande import
+        import os
+        import psutil
     except Exception:
         return
     try:
@@ -67,13 +70,22 @@ def _log_ram(label: str) -> None:
         pass
 
 # ========== Eerste init (NIET cache leegmaken) ==========
+# Initialiseer een Streamlit-sessie éénmalig per gebruiker
 if "app_initialized" not in st.session_state:
     st.session_state["app_initialized"] = True
 
 # ========== Streamlit pagina setup ==========
 st.set_page_config(page_title="Friese Warmtevraagkaart", layout="wide")
 st.markdown('<h1 style="font-size: 35px;">Friese Warmtevraagkaart (Heat Demand)</h1>', unsafe_allow_html=True)
-st.markdown('<p style="font-size: 16px; margin-top: -10px;">De kaart laat het gemiddelde jaarverbruik in 2024 zien van gas in m3, omgerekend naar kWh en MWh.</p>', unsafe_allow_html=True)
+st.markdown(
+    """
+    <p style="font-size: 16px; margin-top: -10px;">
+        De kaart laat het gemiddelde jaarverbruik in 2024 zien van gas in m³,
+        omgerekend naar kWh en MWh.
+    </p>
+    """,
+    unsafe_allow_html=True,
+)
 
 # --- containers om de gewenste volgorde te forceren ---
 kpi_container = st.container()
@@ -121,19 +133,29 @@ st.session_state.setdefault("first_hint_shown", False)
 
 # ===== Helpers voor stabiele vergelijkingen =====
 def _as_sorted_list(x):
-    if x is None: return []
-    if isinstance(x, (list, tuple, set)): return sorted(list(x))
+    """Converteer invoer naar een gesorteerde lijst voor Jaccard-vergelijkingen."""
+    if x is None:
+        return []
+    if isinstance(x, (list, tuple, set)):
+        return sorted(list(x))
     return [x]
 
 def _as_int(x, default=0):
-    try: return int(x)
-    except Exception: return default
+    """Robuuste int-cast met fallbackwaarde."""
+    try:
+        return int(x)
+    except Exception:
+        return default
 
 def _as_float(x, default=0.0):
-    try: return float(x)
-    except Exception: return default
+    """Robuuste float-cast met fallbackwaarde."""
+    try:
+        return float(x)
+    except Exception:
+        return default
 
 def _as_tuple_2(x, default=(0, 0)):
+    """Converteer een iterabele naar tuple[int, int] voor bouwjaar slider."""
     try:
         a, b = x
         return (_as_int(a), _as_int(b))
@@ -142,6 +164,7 @@ def _as_tuple_2(x, default=(0, 0)):
 
 # ===== Filters-snapshot =====
 def _build_filters_snapshot(ui: dict) -> dict:
+    """Maak een hashbare snapshot van alle filters voor change-detectie."""
     L = st.session_state.get("LAYER_CFG", LAYER_CFG)
     return {
         "zoom_level":          _as_int(ui.get("zoom_level")),
@@ -152,6 +175,7 @@ def _build_filters_snapshot(ui: dict) -> dict:
         "show_main_layer":     bool(ui.get("show_main_layer", True)),
         "show_indicative_layer": bool(ui.get("show_indicative_layer", True)),
         "threshold":           _as_float(ui.get("threshold", 50.0)),
+        "gemeente":            _as_sorted_list(ui.get("gemeente_selectie")),
         "woonplaats":          _as_sorted_list(ui.get("woonplaats_selectie")),
         "Energieklasse":       _as_sorted_list([str(x) for x in ui.get("energieklasse_selectie", [])]),
         "bouwjaar_range":      _as_tuple_2(ui.get("bouwjaar_range", (0, 3000))),
@@ -177,6 +201,7 @@ def _build_filters_snapshot(ui: dict) -> dict:
     }
 
 def _filters_without_zoom(ui: dict) -> dict:
+    """Snapshot zonder zoomvelden, handig voor UI-vergelijkingen."""
     snap = _build_filters_snapshot(ui).copy()
     snap.pop("zoom_level", None)
     snap.pop("resolution", None)
@@ -191,22 +216,18 @@ filters_changed = current_filters != st.session_state.prev_filters
 if filters_changed:
     st.session_state.prev_filters = current_filters
     st.session_state.show_map = False
-    st.session_state["_map_dirty"] = True
+    st.session_state["_map_changed"] = True
     st.session_state["sites_ready"] = False
 else:
-    st.session_state["_map_dirty"] = False
+    st.session_state["_map_changed"] = False
 
 if st.sidebar.button("Maak kaart"):
     st.session_state.show_map = True
-    st.session_state["_map_dirty"] = False
-
-if st.session_state.get("_map_dirty"):
-    pass  # manier om toekomstige logica toe te voegen; melding verplaatst naar kaartcontainer
+    st.session_state["_map_changed"] = False
 
 # ========== H3 indexering en aggregaties ==========
-BASE_H3_RES = 12
-
 def _build_res12(df_src: pd.DataFrame):
+    """Bereken de h3-index op basisresolutie voor alle rijen."""
     lat_np = df_src["latitude"].astype("float32").to_numpy()
     lon_np = df_src["longitude"].astype("float32").to_numpy()
     h3_res12 = [h3.latlng_to_cell(float(la), float(lo), BASE_H3_RES) for la, lo in zip(lat_np, lon_np)]
@@ -214,10 +235,12 @@ def _build_res12(df_src: pd.DataFrame):
 
 @st.cache_data(show_spinner=False, max_entries=2, ttl=1800)
 def _build_res12_cached(df_src: pd.DataFrame):
+    """Cache-wrapper rond _build_res12 om herhaald werk te voorkomen."""
     return _build_res12(df_src)
 
 @st.cache_data(show_spinner=False, max_entries=6, ttl=1800)
 def _ensure_parent_series_for_cached(df_with_h3_res12: pd.DataFrame, res: int) -> pd.Series:
+    """Geef h3-index op gewenste resolutie, bereken ouders indien nodig."""
     if res == BASE_H3_RES:
         return df_with_h3_res12["h3_r12"]
     parents = [h3.cell_to_parent(h, res) for h in df_with_h3_res12["h3_r12"]]
@@ -226,7 +249,18 @@ def _ensure_parent_series_for_cached(df_with_h3_res12: pd.DataFrame, res: int) -
 # Kleiner cachevenster/TTL om RAM-opbouw te voorkomen
 @st.cache_data(show_spinner=False, max_entries=2, ttl=240)
 def build_res12_agg(df_points_res12: pd.DataFrame):
-    tmp = df_points_res12.loc[:, ["h3_r12","kWh_per_m2","gemiddeld_jaarverbruik_mWh","totale_oppervlakte","bouwjaar","aantal_VBOs"]]
+    """Aggregeer alle puntdata naar resolutie 12."""
+    tmp = df_points_res12.loc[
+        :,
+        [
+            "h3_r12",
+            "kWh_per_m2",
+            "gemiddeld_jaarverbruik_mWh",
+            "totale_oppervlakte",
+            "bouwjaar",
+            "aantal_VBOs",
+        ],
+    ]
     kwh_sum = pd.to_numeric(tmp["kWh_per_m2"], errors="coerce").fillna(0).astype("float32")
     cnt = pd.Series(1, index=tmp.index, dtype="int32")
     res12 = (
@@ -246,7 +280,8 @@ def build_res12_agg(df_points_res12: pd.DataFrame):
 
 @st.cache_data(show_spinner=False, max_entries=2, ttl=240)
 def rollup_to_resolution(res12_agg: pd.DataFrame, target_res: int, _cache_key: int = 0):
-    if target_res == 12:
+    """Rol res12 samen naar een doelresolutie en bereken afgeleide metrics."""
+    if target_res == BASE_H3_RES:
         out = res12_agg.copy().rename(columns={"h3_r12": "h3_index"})
     else:
         parents = res12_agg["h3_r12"].map(lambda h: h3.cell_to_parent(h, target_res))
@@ -270,17 +305,25 @@ def rollup_to_resolution(res12_agg: pd.DataFrame, target_res: int, _cache_key: i
     out["totale_oppervlakte"] = out["sum_area"].round(0)
     out["bouwjaar"] = out["mean_bouwjaar"].round(0)
     out["aantal_VBOs"] = out["sum_vbos"].round(0).astype(int)
-    return out[[
-        "h3_index","kWh_per_m2","gemiddeld_jaarverbruik_mWh","totale_oppervlakte",
-        "aantal_huizen","bouwjaar","aantal_VBOs"
-    ]]
+    return out[
+        [
+            "h3_index",
+            "kWh_per_m2",
+            "gemiddeld_jaarverbruik_mWh",
+            "totale_oppervlakte",
+            "aantal_huizen",
+            "bouwjaar",
+            "aantal_VBOs",
+        ]
+    ]
 
-AVG_HA_BY_RES = {9: 17.6, 10: 8.8, 11: 4.4, 12: 2.2}
 def area_ha_for_res(res: int) -> float:
-    return AVG_HA_BY_RES.get(res, 2.2)
+    """Gemiddelde hectare-oppervlakte per resolutie (fallback op res12)."""
+    return AVG_HA_BY_RES.get(res, AVG_HA_BY_RES[BASE_H3_RES])
 
 
 def _build_map_dataframe(df_input: pd.DataFrame, res: int) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
+    """Bereid dataframes voor de kaart en tooltips."""
     df_map = _build_res12_cached(df_input).reindex(df_input.index)
     _log_ram("after_h3_res12_raw")
 
@@ -331,7 +374,7 @@ if st.session_state.show_map:
 
     df_filtered, df_extra_info, df_view_source = _build_map_dataframe(df_filtered_input, res)
 
-    # afronden/afgeleiden
+    # afronden
     df_filtered["kWh_per_m2"] = df_filtered["kWh_per_m2"].round(0)
     df_filtered["gemiddeld_jaarverbruik_mWh"] = df_filtered["gemiddeld_jaarverbruik_mWh"].round(0)
     df_filtered["totale_oppervlakte"] = df_filtered["totale_oppervlakte"].round(0)
@@ -366,19 +409,34 @@ if st.session_state.show_map:
     df_filtered["color"] = df_filtered["kWh_per_m2"].apply(get_color)
     MAX_HEIGHT = max(df_filtered["kWh_per_m2"].max(), 1)
     threshold = float(ui["threshold"])
-    df_filtered["scaled_elevation"] = ((df_filtered["kWh_per_m2"] - 10) / max((MAX_HEIGHT - 10), 1) * MAX_HEIGHT)
+    df_filtered["scaled_elevation"] = (
+        (df_filtered["kWh_per_m2"] - 10)
+        / max((MAX_HEIGHT - 10), 1)
+        * MAX_HEIGHT
+    )
     df_filtered["scaled_elevation"] = df_filtered["scaled_elevation"].clip(lower=0, upper=threshold)
 
     # merge extra tooltip info
     df_filtered = df_filtered.merge(df_extra_info, on="h3_index", how="left")
-    df_filtered = df_filtered[[
-        "h3_index","kWh_per_m2","color","woonplaats","aantal_huizen","aantal_VBOs",
-        "scaled_elevation","totale_oppervlakte","gemiddeld_jaarverbruik_mWh",
-        "gemiddeld_jaarverbruik_mWh_r","bouwjaar",
-        "MWh_per_ha","MWh_per_ha_r","area_ha","area_ha_r"
-    ]]
-
-    # --------- Warmtevoorziening (alleen als toggle aan) ---------
+    df_filtered = df_filtered[
+        [
+            "h3_index",
+            "kWh_per_m2",
+            "color",
+            "woonplaats",
+            "aantal_huizen",
+            "aantal_VBOs",
+            "scaled_elevation",
+            "totale_oppervlakte",
+            "gemiddeld_jaarverbruik_mWh",
+            "gemiddeld_jaarverbruik_mWh_r",
+            "bouwjaar",
+            "MWh_per_ha",
+            "MWh_per_ha_r",
+            "area_ha",
+            "area_ha_r",
+        ]
+    ]
 
     # --------- Warmtevoorziening (alleen als toggle aan én woonplaats geselecteerd) ---------
     woonplaatsen_selected = [wp for wp in ui.get("woonplaats_selectie", []) if wp]
@@ -423,9 +481,51 @@ if st.session_state.show_map:
                 )
                 sites["gebied_label"] = sites["woonplaats"].fillna("Onbekend")
 
-                def _fmt0s(x): return format_dutch_number(int(x), 0)
+                def _safe_int(val, default=None):
+                    try:
+                        if val is None:
+                            return default
+                        if isinstance(val, float) and math.isnan(val):
+                            return default
+                    except Exception:
+                        pass
+                    try:
+                        return int(round(float(val)))
+                    except Exception:
+                        return default
 
-                for rec in sites.itertuples(index=False):
+                def _safe_float(val, default=None):
+                    try:
+                        if val is None:
+                            return default
+                        if isinstance(val, float) and math.isnan(val):
+                            return default
+                    except Exception:
+                        pass
+                    try:
+                        return float(val)
+                    except Exception:
+                        return default
+
+                def _fmt0s(x):
+                    val = _safe_int(x)
+                    if val is None:
+                        return "-"
+                    return format_dutch_number(val, 0)
+
+                def _fmt2s(x):
+                    val = _safe_float(x)
+                    if val is None:
+                        return "-"
+                    return format_dutch_number(val, 2)
+
+                def _fmt_year(x):
+                    val = _safe_int(x)
+                    if val is None:
+                        return "-"
+                    return str(val)
+
+                for idx, rec in enumerate(sites.itertuples(index=False), start=1):
                     record = {
                         "h3_index": rec.h3_index,
                         "woonplaats": rec.woonplaats,
@@ -454,6 +554,134 @@ if st.session_state.show_map:
                     record["hex_section_display"] = "none"
                     record["site_section_display"] = "block"
                     record["geo_section_display"] = "none"
+                    record["site_rank"] = idx
+
+                    # Voor kaartvisualisatie: neem de volledige k-ring mee
+                    hex_ids = list(h3.grid_disk(rec.h3_index, int(k_val)))
+                    df_site_hex = df_filtered[df_filtered["h3_index"].isin(hex_ids)].copy()
+
+                    coverage_polygons = []
+                    coverage_summary = {}
+                    coverage_buildings = []
+                    coverage_hexes = []
+
+                    if hex_ids:
+                        try:
+                            multi_polys = h3.h3_set_to_multi_polygon(hex_ids, geo_json=True)
+                        except Exception:
+                            multi_polys = []
+                        for poly in multi_polys:
+                            for loop in poly:
+                                coords = [[float(pt[1]), float(pt[0])] for pt in loop]
+                                if coords and coords[0] != coords[-1]:
+                                    coords.append(coords[0])
+                                coverage_polygons.append(coords)
+
+                    if not df_site_hex.empty:
+                        def _series_sum(df_local, column_name, want_int=False):
+                            if column_name not in df_local.columns:
+                                return 0
+                            vals = pd.to_numeric(df_local[column_name], errors="coerce").fillna(0)
+                            total = float(vals.sum())
+                            return _safe_int(total, 0) if want_int else _safe_float(total, 0.0)
+
+                        def _series_mean(df_local, column_name, want_int=False):
+                            if column_name not in df_local.columns:
+                                return 0 if want_int else 0.0
+                            vals = pd.to_numeric(df_local[column_name], errors="coerce").dropna()
+                            if vals.empty:
+                                return 0 if want_int else 0.0
+                            mean_val = float(vals.mean())
+                            return _safe_int(mean_val, 0) if want_int else _safe_float(mean_val, 0.0)
+
+                        total_huizen = _series_sum(df_site_hex, "aantal_huizen", want_int=True)
+                        total_vbos = _series_sum(df_site_hex, "aantal_VBOs", want_int=True)
+                        total_mwh = _series_sum(df_site_hex, "gemiddeld_jaarverbruik_mWh_r", want_int=False)
+                        total_area_ha = _series_sum(df_site_hex, "area_ha_r", want_int=False)
+                        total_oppervlakte = _series_sum(df_site_hex, "totale_oppervlakte", want_int=True)
+                        avg_kwh_m2 = _series_mean(df_site_hex, "kWh_per_m2", want_int=False)
+                        avg_bouwjaar = _series_mean(df_site_hex, "bouwjaar", want_int=True)
+                        mwh_density = total_mwh / total_area_ha if total_area_ha else 0.0
+
+                        coverage_summary = {
+                            "site_rank": idx,
+                            "site_rank_label": idx,
+                            "gebied_label": rec.gebied_label,
+                            "aantal_huizen": total_huizen,
+                            "aantal_VBOs": total_vbos,
+                            "gemiddeld_jaarverbruik_mWh_r": total_mwh,
+                            "area_ha_r": total_area_ha,
+                            "totale_oppervlakte": total_oppervlakte,
+                            "kWh_per_m2": avg_kwh_m2,
+                            "bouwjaar": avg_bouwjaar,
+                            "MWh_per_ha_r": mwh_density,
+                            "aantal_huizen_fmt": _fmt0s(total_huizen),
+                            "aantal_VBOs_fmt": _fmt0s(total_vbos),
+                            "gemiddeld_jaarverbruik_mWh_r_fmt": _fmt0s(total_mwh),
+                            "area_ha_r_fmt": _fmt2s(total_area_ha),
+                            "totale_oppervlakte_fmt": _fmt0s(total_oppervlakte),
+                            "kWh_per_m2_fmt": _fmt0s(avg_kwh_m2),
+                            "MWh_per_ha_r_fmt": _fmt2s(mwh_density),
+                            "bouwjaar_fmt": _fmt_year(avg_bouwjaar),
+                            "hex_section_display": "block",
+                            "site_section_display": "block",
+                            "geo_section_display": "none",
+                        }
+
+                        for cov in df_site_hex.itertuples(index=False):
+                            cov_dict = {
+                                "h3_index": cov.h3_index,
+                                "woonplaats": getattr(cov, "woonplaats", ""),
+                                "aantal_huizen": _safe_int(getattr(cov, "aantal_huizen", 0), 0) or 0,
+                                "aantal_VBOs": _safe_int(getattr(cov, "aantal_VBOs", 0), 0) or 0,
+                                "MWh_per_ha_r": _safe_float(getattr(cov, "MWh_per_ha_r", 0.0), 0.0) or 0.0,
+                                "gemiddeld_jaarverbruik_mWh_r": _safe_float(getattr(cov, "gemiddeld_jaarverbruik_mWh_r", 0.0), 0.0) or 0.0,
+                                "area_ha_r": _safe_float(getattr(cov, "area_ha_r", 0.0), 0.0) or 0.0,
+                                "kWh_per_m2": _safe_float(getattr(cov, "kWh_per_m2", 0.0), 0.0) or 0.0,
+                                "totale_oppervlakte": _safe_int(getattr(cov, "totale_oppervlakte", 0), 0) or 0,
+                                "bouwjaar": _safe_int(getattr(cov, "bouwjaar", 0), 0) or 0,
+                                "aantal_huizen_fmt": _fmt0s(getattr(cov, "aantal_huizen", 0)),
+                                "aantal_VBOs_fmt": _fmt0s(getattr(cov, "aantal_VBOs", 0)),
+                                "MWh_per_ha_r_fmt": _fmt2s(getattr(cov, "MWh_per_ha_r", 0.0)),
+                                "gemiddeld_jaarverbruik_mWh_r_fmt": _fmt0s(getattr(cov, "gemiddeld_jaarverbruik_mWh_r", 0)),
+                                "area_ha_r_fmt": _fmt2s(getattr(cov, "area_ha_r", 0.0)),
+                                "kWh_per_m2_fmt": _fmt0s(getattr(cov, "kWh_per_m2", 0)),
+                                "totale_oppervlakte_fmt": _fmt0s(getattr(cov, "totale_oppervlakte", 0)),
+                                "bouwjaar_fmt": _fmt_year(getattr(cov, "bouwjaar", 0)),
+                                "hex_section_display": "block",
+                                "site_section_display": "block",
+                                "geo_section_display": "none",
+                                "cluster_buildings": record["cluster_buildings"],
+                                "cap_buildings": record["cap_buildings"],
+                                "connected_buildings": record["connected_buildings"],
+                                "cluster_MWh": record["cluster_MWh"],
+                                "cap_MWh": record["cap_MWh"],
+                                "connected_MWh": record["connected_MWh"],
+                                "utilization_pct": record["utilization_pct"],
+                                "cluster_buildings_fmt": record["cluster_buildings_fmt"],
+                                "cap_buildings_fmt": record["cap_buildings_fmt"],
+                                "connected_buildings_fmt": record["connected_buildings_fmt"],
+                                "cluster_MWh_fmt": record["cluster_MWh_fmt"],
+                                "cap_MWh_fmt": record["cap_MWh_fmt"],
+                                "connected_MWh_fmt": record["connected_MWh_fmt"],
+                                "utilization_pct_fmt": record["utilization_pct_fmt"],
+                                "site_rank": idx,
+                                "site_rank_label": idx,
+                            }
+                            coverage_hexes.append(cov_dict)
+
+                        if "polygon_shape" in df_site_hex.columns:
+                            coverage_buildings = df_site_hex.loc[:, ["h3_index", "polygon_shape"]].copy()
+                            coverage_buildings["polygon_shape"] = coverage_buildings["polygon_shape"].astype(str)
+                            coverage_buildings["site_rank"] = idx
+                            coverage_buildings["gebouw_id"] = coverage_buildings.index.astype(int) + 1
+                            coverage_buildings = coverage_buildings.to_dict("records")
+
+                    record["coverage_polygons"] = coverage_polygons
+                    record["coverage_summary"] = coverage_summary
+                    record["coverage_buildings"] = coverage_buildings
+                    record["coverage_hexes"] = coverage_hexes
+                    record["coverage_hex_ids"] = hex_ids
                     record["lat"], record["lon"] = h3.cell_to_latlng(rec.h3_index)
                     records.append(record)
 
@@ -492,12 +720,20 @@ if st.session_state.show_map:
 
     bodem_layers = create_bodem_layers(geojson_dict)
 
-    # H3 hoofdlaag(en) per zoom → géén records, direct DataFrame
+    # H3 hoofdlaag(en) per zoom
     base_hex_cols = [
-        "h3_index","color","scaled_elevation","woonplaats",
-        "aantal_huizen","aantal_VBOs",
-        "MWh_per_ha_r","gemiddeld_jaarverbruik_mWh_r",
-        "area_ha_r","kWh_per_m2","totale_oppervlakte","bouwjaar"
+        "h3_index",
+        "color",
+        "scaled_elevation",
+        "woonplaats",
+        "aantal_huizen",
+        "aantal_VBOs",
+        "MWh_per_ha_r",
+        "gemiddeld_jaarverbruik_mWh_r",
+        "area_ha_r",
+        "kWh_per_m2",
+        "totale_oppervlakte",
+        "bouwjaar",
     ]
     df_hex_view = df_filtered.loc[:, base_hex_cols].copy()
 
@@ -514,21 +750,36 @@ if st.session_state.show_map:
     df_hex_view["area_ha_r_fmt"]                    = _fmt2_val(df_hex_view["area_ha_r"])
     df_hex_view["kWh_per_m2_fmt"]                   = _fmt0_val(df_hex_view["kWh_per_m2"])
     df_hex_view["totale_oppervlakte_fmt"]           = _fmt0_val(df_hex_view["totale_oppervlakte"])
-    df_hex_view["bouwjaar_fmt"]                     = df_hex_view["bouwjaar"].astype("int64").map(lambda v: format_dutch_number(int(v), 0))
+    df_hex_view["bouwjaar_fmt"]                     = df_hex_view["bouwjaar"].astype("int64").map(lambda v: str(int(v)))
 
     df_hex_view["hex_section_display"]  = "block"
     df_hex_view["site_section_display"] = "none"
     df_hex_view["geo_section_display"]  = "none"
 
     cols_for_hex = [
-        "h3_index","color","scaled_elevation","woonplaats",
-        "aantal_huizen","aantal_VBOs",
-        "MWh_per_ha_r","gemiddeld_jaarverbruik_mWh_r",
-        "area_ha_r","kWh_per_m2","totale_oppervlakte","bouwjaar",
-        "aantal_huizen_fmt","aantal_VBOs_fmt",
-        "MWh_per_ha_r_fmt","gemiddeld_jaarverbruik_mWh_r_fmt",
-        "area_ha_r_fmt","kWh_per_m2_fmt","totale_oppervlakte_fmt","bouwjaar_fmt",
-        "hex_section_display","site_section_display","geo_section_display"
+        "h3_index",
+        "color",
+        "scaled_elevation",
+        "woonplaats",
+        "aantal_huizen",
+        "aantal_VBOs",
+        "MWh_per_ha_r",
+        "gemiddeld_jaarverbruik_mWh_r",
+        "area_ha_r",
+        "kWh_per_m2",
+        "totale_oppervlakte",
+        "bouwjaar",
+        "aantal_huizen_fmt",
+        "aantal_VBOs_fmt",
+        "MWh_per_ha_r_fmt",
+        "gemiddeld_jaarverbruik_mWh_r_fmt",
+        "area_ha_r_fmt",
+        "kWh_per_m2_fmt",
+        "totale_oppervlakte_fmt",
+        "bouwjaar_fmt",
+        "hex_section_display",
+        "site_section_display",
+        "geo_section_display",
     ]
     df_hex_view = df_hex_view.loc[:, cols_for_hex]
     indic_mask = df_filtered["kWh_per_m2"] > threshold
@@ -536,10 +787,10 @@ if st.session_state.show_map:
     _log_ram("before_pydeck_layers")
     layers = create_layers_by_zoom(df_hex_view, ui["show_main_layer"], ui["extruded"], ui["zoom_level"])
 
-    # Sites (bovenop)
+    site_layers = []
     if allow_sites and sites_records:
         sites_costed_records = st.session_state.sites_costed if st.session_state.get("sites_ready") else None
-        layers.extend(create_site_layers(sites_records, sites_costed_records))
+        site_layers = create_site_layers(sites_records, sites_costed_records)
 
     # Indicatieve aandachtslaag
     if ui["show_indicative_layer"] and not df_indicative.empty:
@@ -549,32 +800,44 @@ if st.session_state.show_map:
     hide_bg = bool(ui.get("hide_basemap"))
     base_layers = build_base_layers(ui.get("map_style"), hide_bg)
 
-    # Volgorde: basemap → bodem → woonlagen → H3/indicatief/sites
-    all_layers = base_layers + bodem_layers + extra_layers + layers
+    # Volgorde: basemap -> bodem -> woonlagen -> H3/indicatief/sites
+    all_layers = base_layers + bodem_layers + extra_layers + layers + site_layers
 
     # ========== ViewState ==========
     def _view_for_selection(df_full, woonplaatsen_geselecteerd):
-        FRIESLAND_CENTER = (53.125, 5.75); FRIESLAND_ZOOM = 8
-        MIN_ZOOM, MAX_ZOOM = 8, 12.0
+        """Bepaal kaartcentrum en zoom op basis van de huidige selectie."""
+        friesland_center = (53.125, 5.75)
+        friesland_zoom = 8
+        min_zoom, max_zoom = 8, 12.0
         if not woonplaatsen_geselecteerd:
-            return FRIESLAND_CENTER[0], FRIESLAND_CENTER[1], FRIESLAND_ZOOM
+            return friesland_center[0], friesland_center[1], friesland_zoom
         df_sel = df_full[df_full["woonplaats"].isin(woonplaatsen_geselecteerd)]
         if df_sel.empty:
-            return FRIESLAND_CENTER[0], FRIESLAND_CENTER[1], FRIESLAND_ZOOM
-        lat_center = float(df_sel["latitude"].mean()); lon_center = float(df_sel["longitude"].mean())
+            return friesland_center[0], friesland_center[1], friesland_zoom
+        lat_center = float(df_sel["latitude"].mean())
+        lon_center = float(df_sel["longitude"].mean())
         if len(woonplaatsen_geselecteerd) == 1:
             return lat_center, lon_center, 12.0
-        lat_min, lat_max = float(df_sel["latitude"].min()), float(df_sel["latitude"].max())
-        lon_min, lon_max = float(df_sel["longitude"].min()), float(df_sel["longitude"].max())
-        lat_span = max(0.0001, lat_max - lat_min); lon_span = max(0.0001, lon_max - lon_min)
+        lat_min = float(df_sel["latitude"].min())
+        lat_max = float(df_sel["latitude"].max())
+        lon_min = float(df_sel["longitude"].min())
+        lon_max = float(df_sel["longitude"].max())
+        lat_span = max(0.0001, lat_max - lat_min)
+        lon_span = max(0.0001, lon_max - lon_min)
         span = max(lat_span, lon_span)
-        if   span > 2.0:  zoom = 8.0
-        elif span > 1.0:  zoom = 8.0
-        elif span > 0.5:  zoom = 9.0
-        elif span > 0.25: zoom = 9.0
-        elif span > 0.12: zoom = 10.0
-        else:             zoom = 11.0
-        zoom = max(MIN_ZOOM, min(MAX_ZOOM, zoom))
+        if span > 2.0:
+            zoom = 8.0
+        elif span > 1.0:
+            zoom = 8.0
+        elif span > 0.5:
+            zoom = 9.0
+        elif span > 0.25:
+            zoom = 9.0
+        elif span > 0.12:
+            zoom = 10.0
+        else:
+            zoom = 11.0
+        zoom = max(min_zoom, min(max_zoom, zoom))
         return lat_center, lon_center, zoom
 
     lat, lon, zoom = _view_for_selection(df_view_source, ui["woonplaats_selectie"])
@@ -601,29 +864,22 @@ if st.session_state.show_map:
 
     # Opruimen om RAM-pieken terug te geven
     del deck, all_layers, layers, base_layers, bodem_layers, extra_layers, df_hex_view
-    if "sites_records" in locals(): del sites_records
-    if "sites_costed_records" in locals(): del sites_costed_records
+    sites_records = None
+    sites_costed_records = None
     gc.collect()
 
     # ========== Tabellen ==========
     with tables_container:
         render_tabs(df_filtered, threshold, ui["show_sites_layer"], st.session_state.get("sites_costed"))
-    st.session_state["_map_dirty"] = False
-
-    # --- expliciet opruimen om pieken kort te houden ---
-    for _var in ["df_view_source", "df_indicative", "df_filtered", "df_hex_view"]:
-        if _var in locals():
-            try: del locals()[_var]
-            except: pass
-    gc.collect()
+    st.session_state["_map_changed"] = False
 
 else:
     with map_container:
-        # - Eerste keer openen → initiële instructie
-        # - Daarna, als filters gewijzigd zijn → update-instructie
-        # - Anders (nog niets gedaan) → neutrale instructie
-        if st.session_state.get("_map_dirty"):
-            st.info("Filters gewijzigd. Klik op 'Maak kaart' om de kaart bij te werken.")
+        # - Eerste keer openen -> initiële instructie
+        # - Daarna, als filters gewijzigd zijn -> update-instructie
+        # - Anders (nog niets gedaan) -> neutrale instructie
+        if st.session_state.get("_map_changed"):
+            st.info("De filters zijn gewijzigd. Klik op 'Maak kaart' om de kaart bij te werken.")
         elif not st.session_state.get("first_hint_shown", False):
             st.info("Selecteer de gewenste filters. Klik vervolgens op 'Maak kaart' om de kaart weer te geven.")
             st.session_state["first_hint_shown"] = True

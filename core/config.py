@@ -1,27 +1,25 @@
-# core/config.py
+"""Basisconfiguratie voor de Streamlit-app en scripts.
+
+Deze module centraliseert alle paden, URL-overrides en laag instellingen zodat
+het project vanuit één plaats kan worden geconfigureerd.
+"""
+
 from __future__ import annotations
-from pathlib import Path
+
 import os
+from pathlib import Path
+from typing import Any
 
-
-# probeer st.secrets als we in Streamlit draaien
 try:
     import streamlit as st
-    def _env_url(var: str) -> str | None:
-        v = None
-        try:
-            v = st.secrets.get(var)  # werkt op Streamlit 1.18+
-        except Exception:
-            pass
-        if not v:
-            v = os.getenv(var, "").strip()
-        return v or None
-except Exception:
-    # fallback buiten Streamlit (tests/CLI)
-    def _env_url(var: str) -> str | None:
-        v = os.getenv(var, "").strip()
-        return v or None
+except Exception:  # Streamlit niet beschikbaar (CLI/tests)
+    st = None  # type: ignore[assignment]
 
+# -----------------------------
+# Projectconstanten
+# -----------------------------
+BASE_H3_RES: int = 12
+AVG_HA_BY_RES: dict[int, float] = {9: 17.6, 10: 8.8, 11: 4.4, 12: 2.2}
 
 # -----------------------------
 # Project-relative base paths
@@ -30,41 +28,62 @@ ROOT = Path(__file__).resolve().parents[1]
 DATA_DIR = ROOT / "data"
 LAYERS_DIR = DATA_DIR / "layers"
 
-def _env_path(var: str, default: Path) -> Path:
-    """Required file/dir; env var can override."""
-    val = os.getenv(var)
-    return Path(val).expanduser().resolve() if val else default
 
-def _env_path_opt(var: str, default: Path | None) -> Path | None:
-    """Optional file/dir; env var can override."""
-    val = os.getenv(var)
-    return Path(val).expanduser().resolve() if val else default
+def _get_secret(var: str) -> str | None:
+    """Lees een configuratiewaarde uit Streamlit secrets indien beschikbaar."""
+    if st is None:
+        return None
+    try:
+        value: Any = st.secrets.get(var)
+    except Exception:
+        return None
+    if value is None:
+        return None
+    return str(value).strip() or None
+
 
 def _env_url(var: str) -> str | None:
-    """Optional URL override."""
+    """Geef eerst een Streamlit-secret, anders een omgevingsvariabele terug."""
+    secret_val = _get_secret(var)
+    if secret_val:
+        return secret_val
     val = os.getenv(var, "").strip()
     return val or None
+
+
+def _env_path(var: str, default: Path) -> Path:
+    """Verplicht pad. Laat een env-var het standaardpad overschrijven."""
+    val = os.getenv(var)
+    return Path(val).expanduser().resolve() if val else default
+
+
+def _env_path_opt(var: str, default: Path | None) -> Path | None:
+    """Optioneel pad: retourneer None wanneer er geen override is."""
+    val = os.getenv(var)
+    return Path(val).expanduser().resolve() if val else default
 
 
 # -----------------------------
 # Data sources (Paths + optional URLs)
 # -----------------------------
-DATA_CSV_PATH        = _env_path("WARMTE_DATA_CSV", DATA_DIR / "data_kWh.parquet")
-DATA_CSV_URL         = _env_url("WARMTE_URL_DATA_CSV")
+DATA_CSV_PATH = _env_path("WARMTE_DATA_CSV", DATA_DIR / "data.parquet")
+DATA_CSV_URL = _env_url("WARMTE_URL_DATA_CSV")
 
-PRECOMPUTED_DIR       = DATA_DIR / "precomputed"
+PRECOMPUTED_DIR = DATA_DIR / "precomputed"
 H3_RES12_GROUPED_PATH = PRECOMPUTED_DIR / "h3_res12_grouped.parquet"
 
-ENERGIEARMOEDE_PATH  = _env_path("WARMTE_LYR_ENERGIEARMOEDE", LAYERS_DIR / "energiearmoede_frl.geojson.gz")
+ENERGIEARMOEDE_PATH = _env_path(
+    "WARMTE_LYR_ENERGIEARMOEDE", LAYERS_DIR / "energiearmoede_frl.geojson.gz"
+)
+KOOPWONINGEN_PATH = _env_path(
+    "WARMTE_LYR_KOOPWONINGEN", LAYERS_DIR / "koopwoningen_frl.geojson.gz"
+)
+WOONCORPORATIE_PATH = _env_path(
+    "WARMTE_LYR_WOONCORPORATIE", LAYERS_DIR / "wooncorporatie_frl.geojson.gz"
+)
+SPOORDEEL_PATH = _env_path("WARMTE_LYR_SPOORDEEL", LAYERS_DIR / "spoordeel.geojson.gz")
+WATERDEEL_PATH = _env_path_opt("WARMTE_LYR_WATERDEEL", None)
 
-KOOPWONINGEN_PATH    = _env_path("WARMTE_LYR_KOOPWONINGEN",   LAYERS_DIR / "koopwoningen_frl.geojson.gz")
-
-WOONCORPORATIE_PATH  = _env_path("WARMTE_LYR_WOONCORPORATIE", LAYERS_DIR / "wooncorporatie_frl.geojson.gz")
-
-SPOORDEEL_PATH       = _env_path("WARMTE_LYR_SPOORDEEL",      LAYERS_DIR / "spoordeel.geojson.gz")
-
-WATERDEEL_PATH       = _env_path_opt("WARMTE_LYR_WATERDEEL",  None)
-#WATERDEEL_URL        = _env_url("WARMTE_URL_WATERDEEL")
 
 # ================================
 # Lagen-config

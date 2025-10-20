@@ -1,12 +1,10 @@
 # core/utils.py
 from __future__ import annotations
 
-import json
 import hashlib
 from functools import lru_cache
 from typing import List, Dict, Any
 
-from pathlib import Path
 import pandas as pd
 import streamlit as st
 
@@ -26,7 +24,7 @@ def _lazy_matplotlib():
 @lru_cache(maxsize=16)
 def _cached_palette(palette_name: str, n: int, alpha: int) -> List[List[int]]:
     """
-    Kleine cache rond colormap → RGBA-lijst. Voorkomt herhaalde colormap-resolves.
+    Kleine cache rond colormap -> RGBA-lijst. Voorkomt herhaalde colormap-resolves.
     """
     mpl = _lazy_matplotlib()
     cmap = mpl.colormaps.get_cmap(palette_name).resampled(max(1, n))
@@ -40,15 +38,15 @@ def _cached_palette(palette_name: str, n: int, alpha: int) -> List[List[int]]:
 
 def get_color_palette(palette_name="OrRd", n=4, alpha=180):
     """
-    Returns an RGBA list of length n from a given colormap name (e.g. 'Greens', 'Purples', 'OrRd').
-    Alpha is 0–255. Lazy + cached.
+    Returns RGBA list of length n from a given colormap name (e.g. 'Greens', 'Purples', 'OrRd').
+    Alpha is 0–255.
     """
     return _cached_palette(str(palette_name), int(n), int(alpha))
 
 
 def get_layer_colors(layer_cfg: dict):
     """
-    Maakt kleurenlijst o.b.v. layer-config (palette/breaks/n_colors/alpha).
+    Maakt kleurenlijst layer-config (palette/breaks/n_colors/alpha).
     """
     return get_color_palette(
         palette_name=layer_cfg.get("palette", "OrRd"),
@@ -58,7 +56,7 @@ def get_layer_colors(layer_cfg: dict):
 
 
 def _spoor_rgb_from_cfg(cfg: dict):
-    """Retourneert (r,g,b) voor spoor uit LAYER_CFG['spoordeel'].""" 
+    """Returns (r,g,b) voor spoor uit LAYER_CFG['spoordeel'].""" 
     wc = cfg["spoordeel"]
     base = wc.get("palette", [0, 0, 0])
     if isinstance(base, (list, tuple)) and len(base) >= 3:
@@ -134,10 +132,13 @@ def get_dynamic_line_width(zoom_level):
     return 0
 
 
-def get_hexagon_size(zoom_level):
+def get_hexagon_size(zoom_level: int) -> float:
     """
-    hexagon sizes zijn gebasseerd op Mapbox zie uitleg over zoomniveau.
-    Deze functie returned de km bij elk zoomniveau.
+    Geeft een schatting van de zichtbare schaal (in kilometer)
+    bij het opgegeven zoomniveau van de kaart.
+
+    Deze waarden zijn bedoeld om aan te geven hoe groot het kaartgebied
+    ongeveer is op elk zoomniveau. Het is niet de werkelijke H3-hexagon-grootte.
     """
     hexagon_sizes = {
         1: 5000, 2: 2500, 3: 1500, 4: 700, 5: 350, 6: 175, 7: 90,
@@ -254,11 +255,11 @@ def pct_color_from_breaks(v, breaks, colors):
 @st.cache_data(show_spinner=False, max_entries=24)
 def colorize_geojson_cached(gjson: dict, prop_name: str, out_prop: str, breaks: list, colors: list, layer_label: str = ""):
     """
-    Schrijft per feature een RGBA in properties[out_prop] o.b.v. properties[prop_name].
+    Schrijft per feature een RGBA in properties[out_prop] -> properties[prop_name].
     Cached, zodat de kleurtoewijzing niet steeds opnieuw doorlopen wordt.
 
     Optimalisatie:
-    - Geen deepcopy van geometrieën; shallow copy properties en bouw nieuwe features-array.
+    - Geen deepcopy van geometrieën.
     - Behoud minimale keys voor tooltip (buurt/gemeente + label + pct).
     """
     if not gjson or not isinstance(gjson, dict) or gjson.get("type") != "FeatureCollection":
@@ -315,30 +316,63 @@ def build_deck_tooltip() -> dict:
     Houdt placeholders in sync met kolomnamen uit app.py.
     """
     html = """
-    <div style="display:{geo_section_display};">
-        <b>{_layer_label}</b><br>
-        <b>Waarde:</b> {_value_pct_fmt}%<br>
-        <b>Gemeente:</b> {gemeentenaam}<br>
-        <b>Buurt:</b> {buurtnaam}
-    </div>
-    <div style="display:{hex_section_display};">
-        <b>Woonplaats:</b> {woonplaats}<br>
-        <b>Aantal panden:</b> {aantal_huizen_fmt}<br>
-        <b>Aantal VBO's:</b> {aantal_VBOs_fmt}<br>
-        <b>Warmtevraag-dichtheid:</b> {MWh_per_ha_r_fmt} MWh/ha<br>
-        <b>Totale Heat Demand:</b> {gemiddeld_jaarverbruik_mWh_r_fmt} MWh<br>
-        <b>Oppervlakte cel:</b> {area_ha_r_fmt} ha<br>
-        <b>Gemiddelde Energiegebruik:</b> {kWh_per_m2_fmt} kWh/m²<br>
-        <b>Totale Oppervlakte:</b> {totale_oppervlakte_fmt} m²<br>
-        <b>Gemiddelde Bouwjaar:</b> {bouwjaar_fmt}<br>
-    </div>
-    <div style="display:{site_section_display}">
-        <b>Collectieve voorziening (kandidaat)</b><br>
-        <b>Gebied:</b> {woonplaats}<br>
-        <b>Gebouwen in radar:</b> {cluster_buildings_fmt} &nbsp;|&nbsp; <b>Capaciteit:</b> {cap_buildings_fmt}<br>
-        <b>Aangesloten gebouwen:</b> {connected_buildings_fmt}<br>
-        <b>Warmtevraag in radar:</b> {cluster_MWh_fmt} MWh &nbsp;|&nbsp; <b>Capaciteit:</b> {cap_MWh_fmt} MWh<br>
-        <b>Aangesloten MWh:</b> {connected_MWh_fmt} MWh &nbsp;(<b>benutting:</b> {utilization_pct_fmt}%)<br>
+    <style>
+      .tooltip-wrapper {
+        display:block;
+        font-size:11px;
+        line-height:1.35;
+        max-width:360px;
+      }
+      .tooltip-section {
+        padding:6px 8px;
+        border-radius:6px;
+        border:1px solid #e5e7eb;
+        background:#f9fafb;
+        margin-bottom:6px;
+      }
+      .tooltip-row {
+        white-space:nowrap;
+      }
+      .tooltip-section h4 {
+        margin:0 0 4px 0;
+        font-size:12px;
+        font-weight:700;
+        letter-spacing:.15px;
+      }
+      .tooltip-highlight {
+        background:#fef3c7;
+        border-color:#f59e0b;
+      }
+    </style>
+    <div class="tooltip-wrapper">
+      <div class="tooltip-section" style="display:{geo_section_display};">
+        <h4>Gebied</h4>
+        <div class="tooltip-row"><strong>{_layer_label}</strong></div>
+        <div class="tooltip-row">Waarde: {_value_pct_fmt}%</div>
+        <div class="tooltip-row">Gemeente: {gemeentenaam}</div>
+        <div class="tooltip-row">Buurt: {buurtnaam}</div>
+      </div>
+      <div class="tooltip-section" style="display:{hex_section_display};">
+        <h4>Heat Demand</h4>
+        <div class="tooltip-row">Woonplaats: {woonplaats}</div>
+        <div class="tooltip-row">Aantal panden: {aantal_huizen_fmt}</div>
+        <div class="tooltip-row">Aantal VBO's: {aantal_VBOs_fmt}</div>
+        <div class="tooltip-row">Warmtevraag-dichtheid: {MWh_per_ha_r_fmt} MWh/ha</div>
+        <div class="tooltip-row">Totale Heat Demand: {gemiddeld_jaarverbruik_mWh_r_fmt} MWh</div>
+        <div class="tooltip-row">Oppervlakte cel: {area_ha_r_fmt} ha</div>
+        <div class="tooltip-row">Gemiddelde Energiegebruik: {kWh_per_m2_fmt} kWh/m²</div>
+        <div class="tooltip-row">Totale Oppervlakte: {totale_oppervlakte_fmt} m²</div>
+        <div class="tooltip-row">Gemiddelde Bouwjaar: {bouwjaar_fmt}</div>
+      </div>
+      <div class="tooltip-section tooltip-highlight" style="display:{site_section_display};">
+        <h4>Collectieve voorziening</h4>
+        <div class="tooltip-row">Voorziening #: {site_rank_label}</div>
+        <div class="tooltip-row">Gebouwen in radar: {cluster_buildings_fmt} | Capaciteit: {cap_buildings_fmt}</div>
+        <div class="tooltip-row">Aangesloten gebouwen: {connected_buildings_fmt}</div>
+        <div class="tooltip-row">Warmtevraag in radar (MWh): {cluster_MWh_fmt} | Capaciteit: {cap_MWh_fmt}</div>
+        <div class="tooltip-row">Aangesloten MWh: {connected_MWh_fmt}</div>
+                <div class="tooltip-row">Benutting: {utilization_pct_fmt}%</div>
+      </div>
     </div>
     """
     return {

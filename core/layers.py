@@ -36,6 +36,7 @@ def _to_records(data: Union[Records, "pd.DataFrame"]) -> Records:
     return []
 
 def _fmt0(x):
+    """Formatteer een getal als Nederlandse integer-string."""
     try:
         return format_dutch_number(int(x), 0)
     except Exception:
@@ -45,6 +46,7 @@ def _fmt0(x):
 # GeoJSON filteren op selectie (zoom 11–12)
 # ------------------------------------------------------------
 def filter_geojson_by_selection(gjson: dict, woonplaatsen: list[str] | None, zoom_level: int):
+    """Beperk GeoJSON tot geselecteerde woonplaatsen bij hogere zoomniveaus."""
     if not gjson:
         return gjson
     if zoom_level < 11:
@@ -67,7 +69,7 @@ def filter_geojson_by_selection(gjson: dict, woonplaatsen: list[str] | None, zoo
 def build_base_layers(style_key: str, hide_basemap: bool):
     """
     Basemap via TileLayer(s); 'Geen achtergrondkaart'.
-    - hide_flag=True → geen achtergrondlagen
+    - hide_flag=True -> geen achtergrondlagen
     """
     if hide_basemap:
         return []
@@ -99,6 +101,7 @@ def build_base_layers(style_key: str, hide_basemap: bool):
 # H3 hoofdlaag + indicatieve laag
 # ------------------------------------------------------------
 def create_main_layer(data_hex_df, show: bool, extruded: bool, zoom_level: int, elevation_scale: float):
+    """Bouw de primaire H3-laag met kleur en hoogte op basis van energievraag."""
     # verwacht een DataFrame (geen list[dict])
     return pdk.Layer(
         "H3HexagonLayer",
@@ -132,6 +135,7 @@ def create_indicative_area_layer(data, extruded: bool, zoom_level: int):
     )
 
 def create_layers_by_zoom(data_hex_df, show_main: bool, extruded: bool, zoom_level: int):
+    """Stel de hoofdlaag samen met een passende elevatieschaal per zoomniveau."""
     # Verwacht hier een DataFrame (geen list[dict])
     layers = []
     if zoom_level <= 3:
@@ -153,7 +157,8 @@ def create_site_layers(
 ):
     """
     Maakt:
-      - H3HexagonLayer contour voor gekozen sites
+      - PolygonLayer (contour + semitransparant vlak) per warmtevoorziening
+      - H3HexagonLayer gevuld met dezelfde groene kleur voor de individuele hexagonen
       - ScatterplotLayer markers met alle tooltip-velden (incl. *_fmt)
     """
     site_layers = []
@@ -161,22 +166,97 @@ def create_site_layers(
     if not records:
         return site_layers
 
-    # H3 contour (alleen id + display toggles)
-    contour_records = [{
-        "h3_index": r.get("h3_index"),
-        "hex_section_display": r.get("hex_section_display", "none"),
-        "site_section_display": r.get("site_section_display", "block"),
-        "geo_section_display": r.get("geo_section_display", "none"),
-    } for r in records if r.get("h3_index")]
-    if contour_records:
+    base_fill = [26, 152, 80, 255]
+    base_line = [0, 0, 0, 255]
+
+    polygon_records = []
+    hexagon_records = []
+
+    for r in records:
+        site_rank = int(r.get("site_rank") or 0) or 0
+        coverage_summary = r.get("coverage_summary") or {}
+        polygons = r.get("coverage_polygons") or []
+        hexes = r.get("coverage_hexes") or []
+
+        for poly in polygons:
+            polygon_records.append({
+                "polygon": poly,
+                "site_rank": site_rank,
+                "fill_color": base_fill,
+                "line_color": base_line,
+                "site_rank_label": coverage_summary.get("site_rank_label", site_rank),
+                "woonplaats": r.get("woonplaats", ""),
+                "cluster_buildings": r.get("cluster_buildings"),
+                "cap_buildings": r.get("cap_buildings"),
+                "connected_buildings": r.get("connected_buildings"),
+                "cluster_MWh": r.get("cluster_MWh"),
+                "cap_MWh": r.get("cap_MWh"),
+                "connected_MWh": r.get("connected_MWh"),
+                "utilization_pct": r.get("utilization_pct"),
+                "cluster_buildings_fmt": r.get("cluster_buildings_fmt"),
+                "cap_buildings_fmt": r.get("cap_buildings_fmt"),
+                "connected_buildings_fmt": r.get("connected_buildings_fmt"),
+                "cluster_MWh_fmt": r.get("cluster_MWh_fmt"),
+                "cap_MWh_fmt": r.get("cap_MWh_fmt"),
+                "connected_MWh_fmt": r.get("connected_MWh_fmt"),
+                "utilization_pct_fmt": r.get("utilization_pct_fmt"),
+                # aggregaties voor tooltip
+                "aantal_huizen": coverage_summary.get("aantal_huizen"),
+                "aantal_VBOs": coverage_summary.get("aantal_VBOs"),
+                "gemiddeld_jaarverbruik_mWh_r": coverage_summary.get("gemiddeld_jaarverbruik_mWh_r"),
+                "area_ha_r": coverage_summary.get("area_ha_r"),
+                "totale_oppervlakte": coverage_summary.get("totale_oppervlakte"),
+                "kWh_per_m2": coverage_summary.get("kWh_per_m2"),
+                "MWh_per_ha_r": coverage_summary.get("MWh_per_ha_r"),
+                "bouwjaar": coverage_summary.get("bouwjaar"),
+                "aantal_huizen_fmt": coverage_summary.get("aantal_huizen_fmt"),
+                "aantal_VBOs_fmt": coverage_summary.get("aantal_VBOs_fmt"),
+                "gemiddeld_jaarverbruik_mWh_r_fmt": coverage_summary.get("gemiddeld_jaarverbruik_mWh_r_fmt"),
+                "area_ha_r_fmt": coverage_summary.get("area_ha_r_fmt"),
+                "totale_oppervlakte_fmt": coverage_summary.get("totale_oppervlakte_fmt"),
+                "kWh_per_m2_fmt": coverage_summary.get("kWh_per_m2_fmt"),
+                "MWh_per_ha_r_fmt": coverage_summary.get("MWh_per_ha_r_fmt"),
+                "bouwjaar_fmt": coverage_summary.get("bouwjaar_fmt"),
+                "hex_section_display": coverage_summary.get("hex_section_display", "block"),
+                "site_section_display": coverage_summary.get("site_section_display", "block"),
+                "geo_section_display": coverage_summary.get("geo_section_display", "none"),
+            })
+
+        for cov in hexes:
+            cov_rec = dict(cov)
+            cov_rec["site_rank"] = site_rank
+            cov_rec["fill_color"] = cov_rec.get("fill_color", base_fill)
+            cov_rec["line_color"] = cov_rec.get("line_color", base_line)
+            hexagon_records.append(cov_rec)
+
+    if polygon_records:
+        site_layers.append(pdk.Layer(
+            "PolygonLayer",
+            polygon_records,
+            pickable=True,
+            stroked=True,
+            filled=False,
+            extruded=False,
+            wireframe=False,
+            get_polygon="polygon",
+            get_fill_color=[0, 0, 0, 0],
+            get_line_color=[0, 0, 0, 180],
+            lineWidthMinPixels=2.5,
+            lineWidthMaxPixels=10,
+            opacity=1.0,
+        ))
+
+    if hexagon_records:
         site_layers.append(pdk.Layer(
             "H3HexagonLayer",
-            contour_records,
-            pickable=False, filled=False, stroked=True,
+            hexagon_records,
+            pickable=True,
+            filled=True,
+            stroked=False,
+            extruded=False,
             get_hexagon="h3_index",
-            get_line_color=[26, 152, 80, 255],
-            lineWidthMinPixels=2,
-            visible=True
+            get_fill_color="fill_color",
+            opacity=1.0,
         ))
 
     # Scatter markers: gebruik 'costed' records indien aanwezig
@@ -187,6 +267,10 @@ def create_site_layers(
         lon, lat = r.get("lon"), r.get("lat")
         if lon is None or lat is None:
             continue
+        site_rank = int(r.get("site_rank") or 0) or 0
+        color = base_fill
+
+        coverage_summary = r.get("coverage_summary") or {}
 
         # ruwe waarden
         cluster_buildings = r.get("cluster_buildings")
@@ -201,6 +285,7 @@ def create_site_layers(
             "lon": lon,
             "lat": lat,
             "woonplaats": r.get("woonplaats", ""),
+            "site_rank": site_rank,
 
             # raw
             "cluster_buildings": cluster_buildings,
@@ -221,9 +306,30 @@ def create_site_layers(
             "utilization_pct_fmt": r.get("utilization_pct_fmt") or (str(int(utilization_pct)) if utilization_pct is not None else ""),
 
             # display-velden voor tooltip-secties
-            "hex_section_display": r.get("hex_section_display", "none"),
+            "hex_section_display": coverage_summary.get("hex_section_display", r.get("hex_section_display", "none")),
             "site_section_display": r.get("site_section_display", "block"),
             "geo_section_display": r.get("geo_section_display", "none"),
+
+            # aggregated hex data
+            "aantal_huizen": coverage_summary.get("aantal_huizen"),
+            "aantal_VBOs": coverage_summary.get("aantal_VBOs"),
+            "gemiddeld_jaarverbruik_mWh_r": coverage_summary.get("gemiddeld_jaarverbruik_mWh_r"),
+            "area_ha_r": coverage_summary.get("area_ha_r"),
+            "totale_oppervlakte": coverage_summary.get("totale_oppervlakte"),
+            "kWh_per_m2": coverage_summary.get("kWh_per_m2"),
+            "MWh_per_ha_r": coverage_summary.get("MWh_per_ha_r"),
+            "bouwjaar": coverage_summary.get("bouwjaar"),
+            "aantal_huizen_fmt": coverage_summary.get("aantal_huizen_fmt"),
+            "aantal_VBOs_fmt": coverage_summary.get("aantal_VBOs_fmt"),
+            "gemiddeld_jaarverbruik_mWh_r_fmt": coverage_summary.get("gemiddeld_jaarverbruik_mWh_r_fmt"),
+            "area_ha_r_fmt": coverage_summary.get("area_ha_r_fmt"),
+            "totale_oppervlakte_fmt": coverage_summary.get("totale_oppervlakte_fmt"),
+            "kWh_per_m2_fmt": coverage_summary.get("kWh_per_m2_fmt"),
+            "MWh_per_ha_r_fmt": coverage_summary.get("MWh_per_ha_r_fmt"),
+            "bouwjaar_fmt": coverage_summary.get("bouwjaar_fmt"),
+            "site_rank_label": coverage_summary.get("site_rank_label", site_rank),
+
+            "fill_color": color,
         })
 
     if scatter_records:
@@ -233,7 +339,7 @@ def create_site_layers(
             pickable=True,
             get_position=["lon", "lat"],
             get_radius=25,
-            get_fill_color=[26, 152, 80, 255],
+            get_fill_color="fill_color",
             radius_min_pixels=6,
             radius_max_pixels=10
         ))

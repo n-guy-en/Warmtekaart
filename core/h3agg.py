@@ -15,7 +15,6 @@ from .config import BASE_H3_RES, AVG_HA_BY_RES
 def build_res12(df_src: pd.DataFrame) -> pd.DataFrame:
     """
     Maak één kolom h3_r12 op BASE_H3_RES (12) voor alle punten.
-    Identiek aan je _build_res12 in de monolith.
     """
     lat_np = df_src["latitude"].astype("float32").to_numpy()
     lon_np = df_src["longitude"].astype("float32").to_numpy()
@@ -27,7 +26,6 @@ def build_res12(df_src: pd.DataFrame) -> pd.DataFrame:
 def ensure_parent_series_for(df_with_h3_res12: pd.DataFrame, res: int, cache: dict) -> pd.Series:
     """
     Maak/haal de parent H3-serie voor een doelresolutie 'res'.
-    Identiek aan je _ensure_parent_series_for, maar cache wordt van buiten meegegeven.
     """
     if res == BASE_H3_RES:
         return df_with_h3_res12["h3_r12"]
@@ -46,7 +44,7 @@ def ensure_parent_series_for(df_with_h3_res12: pd.DataFrame, res: int, cache: di
 @st.cache_data(show_spinner=False, max_entries=10)
 def build_res12_agg(df_points_res12: pd.DataFrame) -> pd.DataFrame:
     """
-    Aggregatie op res12 met exact dezelfde kolommen als in je monolith.
+    Aggregatie op res12
     Verwacht dat df_points_res12 kolommen heeft:
       - h3_r12, kWh_per_m2, gemiddeld_jaarverbruik_mWh, totale_oppervlakte, bouwjaar, aantal_VBOs
     """
@@ -71,8 +69,7 @@ def build_res12_agg(df_points_res12: pd.DataFrame) -> pd.DataFrame:
 @st.cache_data(show_spinner=False, max_entries=10)
 def rollup_to_resolution(res12_agg: pd.DataFrame, target_res: int, _cache_key: int = 0) -> pd.DataFrame:
     """
-    Roll-up van res12 naar target_res (of identiek laten als 12),
-    exact dezelfde berekeningen/kolomnamen als je monolith.
+    Roll-up van res12 naar target_res (of laten als 12),
     """
     if target_res == BASE_H3_RES:
         out = res12_agg.copy()
@@ -118,6 +115,6 @@ def rollup_to_resolution(res12_agg: pd.DataFrame, target_res: int, _cache_key: i
 
 def area_ha_for_res(res: int) -> float:
     """
-    Gemiddelde hectare per cel voor de resolutie, exact zoals in je monolith.
+    Gemiddelde hectare per cel voor de resolutie
     """
     return float(AVG_HA_BY_RES.get(res, 2.2))

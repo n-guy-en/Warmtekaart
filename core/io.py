@@ -41,7 +41,11 @@ def load_geojson(path: str | Path, keep_props=None, coord_precision: int = 3, tt
     if not p.exists():
         return None
 
-    raw = gzip.open(p, "rb").read() if p.suffix == ".gz" else p.read_bytes()
+    if p.suffix == ".gz":
+        with gzip.open(p, "rb") as fh:
+            raw = fh.read()
+    else:
+        raw = p.read_bytes()
 
     try:
         gj = orjson.loads(raw)
@@ -154,7 +158,8 @@ def load_data(src: str | Path | None = None, ttl=3600) -> pd.DataFrame:
     usecols = [
         "aantal_VBOs", "totale_oppervlakte", "woonplaats", "Energieklasse",
         "latitude", "longitude", "bouwjaar", "pandstatus",
-        "kWh_per_m2", "gemiddeld_jaarverbruik", "Dataset", "gemiddeld_jaarverbruik_mWh"
+        "kWh_per_m2", "gemiddeld_jaarverbruik", "Dataset", "gemiddeld_jaarverbruik_mWh",
+        "gemeentenaam", "afname_betekenis", "opwek_betekenis",
     ]
 
     csv_dtypes = {
@@ -184,13 +189,16 @@ def load_data(src: str | Path | None = None, ttl=3600) -> pd.DataFrame:
             df = pd.read_csv(read_target, low_memory=False, usecols=usecols)
 
     # ---------- Numerieke types afdwingen ----------
-    for c in ["latitude", "longitude", "kWh_per_m2", "gemiddeld_jaarverbruik_mWh"]:
+    for c in ["latitude", "longitude", "kWh_per_m2", "gemiddeld_jaarverbruik_mWh", "gemiddeld_jaarverbruik"]:
         if c in df.columns:
             df[c] = pd.to_numeric(df[c], errors="coerce").astype("float32")
 
-    for c in ["aantal_VBOs", "totale_oppervlakte", "bouwjaar"]:
-        if c in df.columns:
-            df[c] = pd.to_numeric(df[c], errors="coerce").astype("Int32")
+    if "aantal_VBOs" in df.columns:
+        df["aantal_VBOs"] = pd.to_numeric(df["aantal_VBOs"], errors="coerce").astype("Int16")
+    if "totale_oppervlakte" in df.columns:
+        df["totale_oppervlakte"] = pd.to_numeric(df["totale_oppervlakte"], errors="coerce").astype("Int32")
+    if "bouwjaar" in df.columns:
+        df["bouwjaar"] = pd.to_numeric(df["bouwjaar"], errors="coerce").astype("Int16")
 
     # ---------- RAM reductie ----------
     # Strings -> categories (strenger: pas bij veel herhaling)
@@ -213,6 +221,10 @@ def load_data(src: str | Path | None = None, ttl=3600) -> pd.DataFrame:
     for c in ["lat", "lon"]:
         if c in df.columns:
             df[c] = pd.to_numeric(df[c], errors="coerce").astype("float32")
+
+    drop_optional = [c for c in ["afname_betekenis", "opwek_betekenis"] if c in df.columns]
+    if drop_optional:
+        df.drop(columns=drop_optional, inplace=True)
 
     return df
 
