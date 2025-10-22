@@ -269,7 +269,7 @@ def build_sidebar(df_in: pd.DataFrame) -> Tuple[pd.DataFrame, Dict[str, Any]]:
                 ui["gemeente_selectie"] = []
             else:
                 ui["gemeente_selectie"] = gemeente_selectie
-            df = df.loc["mask_gemeente"]
+            df = df["mask_gemeente"]
 
             # Woonplaats
             st.subheader("Woonplaats")
