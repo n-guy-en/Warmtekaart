@@ -207,6 +207,11 @@ def _filters_without_zoom(ui: dict) -> dict:
     snap.pop("resolution", None)
     return snap
 
+def _changed_filter_keys(prev: dict, curr: dict) -> set[str]:
+    """Bepaalt welke filtervelden gewijzigd zijn tussen twee snapshots."""
+    keys = set(prev) | set(curr)
+    return {k for k in keys if prev.get(k) != curr.get(k)}
+
 if "prev_filters" not in st.session_state:
     st.session_state.prev_filters = _build_filters_snapshot(ui)
 
@@ -214,10 +219,16 @@ current_filters = _build_filters_snapshot(ui)
 filters_changed = current_filters != st.session_state.prev_filters
 
 if filters_changed:
+    changed_keys = _changed_filter_keys(st.session_state.prev_filters, current_filters)
     st.session_state.prev_filters = current_filters
-    st.session_state.show_map = False
-    st.session_state["_map_changed"] = True
-    st.session_state["sites_ready"] = False
+    woonplaats_only_change = bool(changed_keys) and changed_keys.issubset({"woonplaats"})
+    if woonplaats_only_change and st.session_state.get("show_map"):
+        st.session_state["_map_changed"] = False
+        st.session_state["sites_ready"] = False
+    else:
+        st.session_state.show_map = False
+        st.session_state["_map_changed"] = True
+        st.session_state["sites_ready"] = False
 else:
     st.session_state["_map_changed"] = False
 
@@ -438,7 +449,7 @@ if st.session_state.show_map:
         ]
     ]
 
-    # --------- Warmtevoorziening (alleen als toggle aan én woonplaats geselecteerd) ---------
+    # --------- Warmtevoorziening (alleen als toggle aan en woonplaats geselecteerd) ---------
     woonplaatsen_selected = [wp for wp in ui.get("woonplaats_selectie", []) if wp]
     allow_sites = ui.get("show_sites_layer") and zoom_level >= 11 and woonplaatsen_selected
     sites_records = []

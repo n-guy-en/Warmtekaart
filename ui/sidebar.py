@@ -224,6 +224,7 @@ def build_sidebar(df_in: pd.DataFrame) -> Tuple[pd.DataFrame, Dict[str, Any]]:
             st.subheader("Gemeente")
             gemeente_selectie: List[str] = []
             gemeente_changed = False
+            mask_gemeente = pd.Series(True, index=df.index)
             if "gemeentenaam" in df.columns:
                 gemeenten_series = df["gemeentenaam"]
                 if hasattr(gemeenten_series, "cat"):
@@ -235,23 +236,40 @@ def build_sidebar(df_in: pd.DataFrame) -> Tuple[pd.DataFrame, Dict[str, Any]]:
                 if not gemeente_default:
                     if "Leeuwarden" in gemeente_opties:
                         gemeente_default = ["Leeuwarden"]
+                    elif gemeente_opties:
+                        gemeente_default = [gemeente_opties[0]]
                     else:
-                        gemeente_default = gemeente_opties
-                gemeente_selectie = st.multiselect(
-                    "Filter op gemeente:",
-                    options=gemeente_opties,
-                    default=gemeente_default,
-                )
-                if not gemeente_selectie:
-                    st.warning("Selecteer minimaal één gemeente.")
-                    gemeente_selectie = gemeente_default or gemeente_opties
-                prev_gemeente_set = set(prev_gemeente_selectie or [])
-                current_gemeente_set = set(gemeente_selectie)
-                gemeente_changed = current_gemeente_set != prev_gemeente_set
-                st.session_state["_prev_gemeente_selectie"] = gemeente_selectie
-                mask_gemeente = gemeenten_series.astype(str).isin(gemeente_selectie)
-                df = df.loc[mask_gemeente]
-            ui["gemeente_selectie"] = gemeente_selectie
+                        gemeente_default = []
+                
+                if ui["zoom_level"] <= 10:
+                    _ = st.multiselect(
+                        "Filter op gemeente:",
+                        options=gemeente_opties,
+                        default=gemeente_default,
+                        disabled=True,
+                        help="Gemeentefilter is beschikbaar vanaf zoomniveau 11."
+                    )
+                    mask_gemeente = pd.Series(True, index=df.index)
+                    gemeente_selectie = gemeente_default
+                else:
+                    gemeente_selectie = st.multiselect(
+                        "Filter op gemeente:",
+                        options=gemeente_opties,
+                        default=gemeente_default,
+                    )
+                    if not gemeente_selectie:
+                        st.warning("Selecteer minimaal één gemeente.")
+                        gemeente_selectie = gemeente_default or gemeente_opties
+                    prev_gemeente_set = set(prev_gemeente_selectie or [])
+                    current_gemeente_set = set(gemeente_selectie)
+                    gemeente_changed= current_gemeente_set != prev_gemeente_set
+                    st.session_state["_prev_gemeente_selectie"] = gemeente_selectie
+                    mask_gemeente = gemeenten_series.astype(str).isin(gemeente_selectie)
+            if ui["zoom_level"] <= 10:
+                ui["gemeente_selectie"] = []
+            else:
+                ui["gemeente_selectie"] = gemeente_selectie
+            df = df.loc["mask_gemeente"]
 
             # Woonplaats
             st.subheader("Woonplaats")
@@ -260,8 +278,14 @@ def build_sidebar(df_in: pd.DataFrame) -> Tuple[pd.DataFrame, Dict[str, Any]]:
 
             if 1 <= ui["zoom_level"] <= 10:
                 # op lager zoomniveau: Friesland geheel, geen multiselect nodig
-                friesland_woonplaatsen = woonplaatsen_sorted
-                woonplaats_selectie = friesland_woonplaatsen
+                _ = st.multiselect(
+                    "Filter op woonplaats:",
+                    options=woonplaatsen_sorted,
+                    default=woonplaatsen_sorted,
+                    disabled=True,
+                    help="Woonplaatsfilter is beschikbaar vanaf zoomniveau 11."
+                )
+                woonplaats_selectie = woonplaatsen_sorted
                 mask_wp = df["woonplaats"].isin(woonplaats_selectie)
             else:
                 prev_wp = st.session_state.get("woonplaats_selectie", [])
