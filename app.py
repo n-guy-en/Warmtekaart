@@ -120,7 +120,7 @@ df_raw = load_data()
 _log_ram("after_load_data")
 
 # ========== Sidebar / UI ==========
-df_filtered_input, ui = build_sidebar(df_raw)
+df_filtered_input, ui, map_button_clicked = build_sidebar(df_raw)
 _log_ram("after_sidebar")
 
 # ========== State init ==========
@@ -232,7 +232,7 @@ if filters_changed:
 else:
     st.session_state["_map_changed"] = False
 
-if st.sidebar.button("Maak kaart"):
+if map_button_clicked:
     st.session_state.show_map = True
     st.session_state["_map_changed"] = False
 

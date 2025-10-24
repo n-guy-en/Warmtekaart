@@ -109,11 +109,12 @@ def _render_bodem_legend(show_spoor: bool, show_water: bool):
 # ---------------------------
 # Hoofdfunctie
 # ---------------------------
-def build_sidebar(df_in: pd.DataFrame) -> Tuple[pd.DataFrame, Dict[str, Any]]:
+def build_sidebar(df_in: pd.DataFrame) -> Tuple[pd.DataFrame, Dict[str, Any], bool]:
     """
     Bouwt de volledige sidebar en retourneert:
       - df (gefilterd)
       - ui (dict met alle gekozen waarden)
+      - button_clicked (True als de gebruiker op 'Maak Kaart' drukt)
     """
     st.session_state.setdefault("grenswaarde_input", 100)
     st.session_state.setdefault("participatie", 80)
@@ -121,8 +122,10 @@ def build_sidebar(df_in: pd.DataFrame) -> Tuple[pd.DataFrame, Dict[str, Any]]:
     st.session_state.setdefault("BASEMAP_CFG", BASEMAP_CFG)
 
     ui: Dict[str, Any] = {}
+    button_clicked = False
 
     with st.sidebar:
+        button_clicked = st.button("Maak kaart")
         st.header("Opties")
 
         # ---------------- Kaart ----------------
@@ -444,4 +447,4 @@ De analyse laat zien waar een **collectieve warmtevoorziening** (zoals een buurt
 - **k = 5** – grotere buurt, ±91 hexagonen. Omvat een deelwijk of bedrijventerrein van enkele hectares.  
 """)
 
-    return df, ui
+    return df, ui, button_clicked
