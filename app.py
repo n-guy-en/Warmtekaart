@@ -120,7 +120,12 @@ df_raw = load_data()
 _log_ram("after_load_data")
 
 # ========== Sidebar / UI ==========
-df_filtered_input, ui, map_button_clicked = build_sidebar(df_raw)
+sidebar_out = build_sidebar(df_raw)
+if isinstance(sidebar_out, tuple) and len(sidebar_out) == 3:
+    df_filtered_input, ui, map_button_clicked = sidebar_out
+else:
+    df_filtered_input, ui = sidebar_out
+    map_button_clicked = False
 _log_ram("after_sidebar")
 
 # ========== State init ==========
