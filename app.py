@@ -42,10 +42,62 @@ from core.h3sites import (
     filters_fingerprint,
     compute_clusters_cached,
     select_sites_from_clusters,
+    aggregate_clusters,
 )
 from core.io import load_geojson, load_data
 from ui.sidebar import build_sidebar
 from ui.kpis_and_tables import render_kpis, render_tabs
+
+
+def _extract_selected_hex_from_payload(state_obj) -> str | None:
+    """Parse Streamlit/pydeck selection payload en geef h3_index terug."""
+    if state_obj is None:
+        return None
+
+    objects = None
+    if isinstance(state_obj, dict):
+        if "objects" in state_obj:
+            objects = state_obj.get("objects")
+        elif "selection" in state_obj:
+            sel = state_obj.get("selection", {})
+            if isinstance(sel, dict):
+                objects = sel.get("objects")
+    else:
+        sel_attr = getattr(state_obj, "selection", None)
+        if isinstance(sel_attr, dict):
+            objects = sel_attr.get("objects")
+        elif hasattr(state_obj, "get"):
+            maybe = state_obj.get("selection")
+            if isinstance(maybe, dict):
+                objects = maybe.get("objects")
+
+    if not objects:
+        return None
+
+    first_obj = None
+    if isinstance(objects, dict):
+        first_obj = next(iter(objects.values()), None)
+    elif isinstance(objects, list) and objects:
+        first_obj = objects[0]
+
+    if isinstance(first_obj, list) and first_obj:
+        first_obj = first_obj[0]
+
+    if isinstance(first_obj, dict) and "object" in first_obj and isinstance(first_obj["object"], dict):
+        first_obj = first_obj["object"]
+
+    if isinstance(first_obj, dict) and "properties" in first_obj and isinstance(first_obj["properties"], dict):
+        candidate = first_obj["properties"].get("h3_index")
+        if candidate:
+            return str(candidate)
+
+    if isinstance(first_obj, dict):
+        for key in ("h3_index", "hex_id", "hexagon", "cell_id"):
+            candidate = first_obj.get(key)
+            if candidate:
+                return str(candidate)
+
+    return None
 
 # (optioneel) live RAM-meting in sidebar
 #try:
@@ -121,11 +173,17 @@ _log_ram("after_load_data")
 
 # ========== Sidebar / UI ==========
 sidebar_out = build_sidebar(df_raw)
-if isinstance(sidebar_out, tuple) and len(sidebar_out) == 3:
-    df_filtered_input, ui, map_button_clicked = sidebar_out
+map_button_clicked_sidebar = False
+if isinstance(sidebar_out, tuple):
+    if len(sidebar_out) == 3:
+        df_filtered_input, ui, map_button_clicked_sidebar = sidebar_out
+    else:
+        df_filtered_input, ui = sidebar_out
 else:
     df_filtered_input, ui = sidebar_out
-    map_button_clicked = False
+
+map_button_clicked_main = st.button("Maak kaart")
+map_button_clicked = bool(map_button_clicked_sidebar or map_button_clicked_main)
 _log_ram("after_sidebar")
 
 # ========== State init ==========
@@ -133,6 +191,7 @@ st.session_state.setdefault("show_map", False)
 st.session_state.setdefault("sites", [])
 st.session_state.setdefault("sites_costed", [])
 st.session_state.setdefault("sites_ready", False)
+st.session_state.setdefault("manual_site_h3", None)
 
 st.session_state.setdefault("first_hint_shown", False)
 
@@ -213,9 +272,11 @@ def _filters_without_zoom(ui: dict) -> dict:
     return snap
 
 def _changed_filter_keys(prev: dict, curr: dict) -> set[str]:
-    """Bepaalt welke filtervelden gewijzigd zijn tussen twee snapshots."""
+    """Bepaal welke filtervelden gewijzigd zijn tussen twee snapshots."""
     keys = set(prev) | set(curr)
     return {k for k in keys if prev.get(k) != curr.get(k)}
+
+H3_RES13_COL = f"h3_r{BASE_H3_RES}"
 
 if "prev_filters" not in st.session_state:
     st.session_state.prev_filters = _build_filters_snapshot(ui)
@@ -242,34 +303,34 @@ if map_button_clicked:
     st.session_state["_map_changed"] = False
 
 # ========== H3 indexering en aggregaties ==========
-def _build_res12(df_src: pd.DataFrame):
-    """Bereken de h3-index op basisresolutie voor alle rijen."""
+def _build_res13(df_src: pd.DataFrame):
+    """Bereken de h3-index op basisresolutie (BASE_H3_RES) voor alle rijen."""
     lat_np = df_src["latitude"].astype("float32").to_numpy()
     lon_np = df_src["longitude"].astype("float32").to_numpy()
-    h3_res12 = [h3.latlng_to_cell(float(la), float(lo), BASE_H3_RES) for la, lo in zip(lat_np, lon_np)]
-    return df_src.assign(h3_r12=h3_res12)
+    base_cells = [h3.latlng_to_cell(float(la), float(lo), BASE_H3_RES) for la, lo in zip(lat_np, lon_np)]
+    return df_src.assign(**{H3_RES13_COL: base_cells})
 
 @st.cache_data(show_spinner=False, max_entries=2, ttl=1800)
-def _build_res12_cached(df_src: pd.DataFrame):
-    """Cache-wrapper rond _build_res12 om herhaald werk te voorkomen."""
-    return _build_res12(df_src)
+def _build_res13_cached(df_src: pd.DataFrame):
+    """Cache-wrapper rond _build_res13 om herhaald werk te voorkomen."""
+    return _build_res13(df_src)
 
 @st.cache_data(show_spinner=False, max_entries=6, ttl=1800)
-def _ensure_parent_series_for_cached(df_with_h3_res12: pd.DataFrame, res: int) -> pd.Series:
+def _ensure_parent_series_for_cached(df_with_res13: pd.DataFrame, res: int) -> pd.Series:
     """Geef h3-index op gewenste resolutie, bereken ouders indien nodig."""
     if res == BASE_H3_RES:
-        return df_with_h3_res12["h3_r12"]
-    parents = [h3.cell_to_parent(h, res) for h in df_with_h3_res12["h3_r12"]]
-    return pd.Series(parents, index=df_with_h3_res12.index, name=f"h3_r{res}")
+        return df_with_res13[H3_RES13_COL]
+    parents = [h3.cell_to_parent(h, res) for h in df_with_res13[H3_RES13_COL]]
+    return pd.Series(parents, index=df_with_res13.index, name=f"h3_r{res}")
 
 # Kleiner cachevenster/TTL om RAM-opbouw te voorkomen
 @st.cache_data(show_spinner=False, max_entries=2, ttl=240)
-def build_res12_agg(df_points_res12: pd.DataFrame):
-    """Aggregeer alle puntdata naar resolutie 12."""
-    tmp = df_points_res12.loc[
+def build_res13_agg(df_points_res13: pd.DataFrame):
+    """Aggregeer alle puntdata naar de basisresolutie."""
+    tmp = df_points_res13.loc[
         :,
         [
-            "h3_r12",
+            H3_RES13_COL,
             "kWh_per_m2",
             "gemiddeld_jaarverbruik_mWh",
             "totale_oppervlakte",
@@ -279,9 +340,9 @@ def build_res12_agg(df_points_res12: pd.DataFrame):
     ]
     kwh_sum = pd.to_numeric(tmp["kWh_per_m2"], errors="coerce").fillna(0).astype("float32")
     cnt = pd.Series(1, index=tmp.index, dtype="int32")
-    res12 = (
+    res13 = (
         tmp.assign(kwh_sum=kwh_sum, cnt=cnt)
-           .groupby("h3_r12", sort=False, observed=True)
+           .groupby(H3_RES13_COL, sort=False, observed=True)
            .agg(
                sum_mwh=("gemiddeld_jaarverbruik_mWh", "sum"),
                sum_area=("totale_oppervlakte", "sum"),
@@ -292,16 +353,16 @@ def build_res12_agg(df_points_res12: pd.DataFrame):
            )
            .reset_index()
     )
-    return res12
+    return res13
 
 @st.cache_data(show_spinner=False, max_entries=2, ttl=240)
-def rollup_to_resolution(res12_agg: pd.DataFrame, target_res: int, _cache_key: int = 0):
-    """Rol res12 samen naar een doelresolutie en bereken afgeleide metrics."""
+def rollup_to_resolution(res13_agg: pd.DataFrame, target_res: int, _cache_key: int = 0):
+    """Rol de basisresolutie samen naar een doelresolutie en bereken afgeleide metrics."""
     if target_res == BASE_H3_RES:
-        out = res12_agg.copy().rename(columns={"h3_r12": "h3_index"})
+        out = res13_agg.copy().rename(columns={H3_RES13_COL: "h3_index"})
     else:
-        parents = res12_agg["h3_r12"].map(lambda h: h3.cell_to_parent(h, target_res))
-        tmp = res12_agg.assign(h3_parent=parents)
+        parents = res13_agg[H3_RES13_COL].map(lambda h: h3.cell_to_parent(h, target_res))
+        tmp = res13_agg.assign(h3_parent=parents)
         out = (
             tmp.groupby("h3_parent", sort=False, observed=True)
                .agg(
@@ -334,30 +395,31 @@ def rollup_to_resolution(res12_agg: pd.DataFrame, target_res: int, _cache_key: i
     ]
 
 def area_ha_for_res(res: int) -> float:
-    """Gemiddelde hectare-oppervlakte per resolutie (fallback op res12)."""
+    """Gemiddelde hectare-oppervlakte per resolutie (fallback op basisres)."""
     return AVG_HA_BY_RES.get(res, AVG_HA_BY_RES[BASE_H3_RES])
 
 
 def _build_map_dataframe(df_input: pd.DataFrame, res: int) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
     """Bereid dataframes voor de kaart en tooltips."""
-    df_map = _build_res12_cached(df_input).reindex(df_input.index)
-    _log_ram("after_h3_res12_raw")
+    df_map = _build_res13_cached(df_input).reindex(df_input.index)
+    _log_ram("after_h3_base_raw")
 
-    if "h3_r12" in df_map.columns:
-        missing = df_map["h3_r12"].isna()
+    if H3_RES13_COL in df_map.columns:
+        missing = df_map[H3_RES13_COL].isna()
         if missing.any():
-            df_map.loc[missing, "h3_r12"] = [
+            df_map.loc[missing, H3_RES13_COL] = [
                 h3.latlng_to_cell(float(la), float(lo), BASE_H3_RES)
                 for la, lo in zip(df_map.loc[missing, "latitude"], df_map.loc[missing, "longitude"])
             ]
 
     if res == BASE_H3_RES:
-        df_map["h3_index"] = df_map["h3_r12"]
+        df_map["h3_index"] = df_map[H3_RES13_COL]
     else:
-        parent_series = _ensure_parent_series_for_cached(df_map, res).rename(f"h3_r{res}")
-        if f"h3_r{res}" not in df_map.columns:
+        parent_col = f"h3_r{res}"
+        parent_series = _ensure_parent_series_for_cached(df_map, res).rename(parent_col)
+        if parent_col not in df_map.columns:
             df_map = df_map.join(parent_series, how="left")
-        df_map["h3_index"] = df_map[f"h3_r{res}"]
+        df_map["h3_index"] = df_map[parent_col]
 
     for col, kind in [
         ("gemiddeld_jaarverbruik_mWh", "float32"),
@@ -371,15 +433,277 @@ def _build_map_dataframe(df_input: pd.DataFrame, res: int) -> tuple[pd.DataFrame
 
     df_extra_info = df_map.loc[:, ["h3_index", "woonplaats"]].drop_duplicates(subset=["h3_index"])
 
-    res12_agg = build_res12_agg(
-        df_map[["h3_r12", "kWh_per_m2", "gemiddeld_jaarverbruik_mWh",
+    res13_agg = build_res13_agg(
+        df_map[[H3_RES13_COL, "kWh_per_m2", "gemiddeld_jaarverbruik_mWh",
                 "totale_oppervlakte", "bouwjaar", "aantal_VBOs"]]
     )
-    df_filtered = rollup_to_resolution(res12_agg, res, _cache_key=res)
+    df_filtered = rollup_to_resolution(res13_agg, res, _cache_key=res)
     _log_ram("after_rollup_raw")
-    del res12_agg
+    del res13_agg
 
     return df_filtered, df_extra_info, df_map
+
+
+def _build_site_records(
+    sites_df: pd.DataFrame,
+    df_filtered: pd.DataFrame,
+    k_val: int,
+) -> list[dict]:
+    """
+    Zet een sites-DataFrame om naar records met polygonen, hexagonen en geformatteerde metrics.
+    """
+    if sites_df is None or sites_df.empty:
+        return []
+
+    sites = sites_df.merge(
+        df_filtered[["h3_index", "woonplaats"]].drop_duplicates(),
+        on="h3_index",
+        how="left",
+    )
+    woonplaats_series = sites["woonplaats"]
+    if hasattr(woonplaats_series, "cat"):
+        if "Onbekend" not in woonplaats_series.cat.categories:
+            woonplaats_series = woonplaats_series.cat.add_categories(["Onbekend"])
+    sites["woonplaats"] = woonplaats_series
+    sites["gebied_label"] = sites["woonplaats"].fillna("Onbekend")
+
+    def _safe_int(val, default=None):
+        try:
+            if val is None:
+                return default
+            if isinstance(val, float) and math.isnan(val):
+                return default
+        except Exception:
+            pass
+        try:
+            return int(round(float(val)))
+        except Exception:
+            return default
+
+    def _safe_float(val, default=None):
+        try:
+            if val is None:
+                return default
+            if isinstance(val, float) and math.isnan(val):
+                return default
+        except Exception:
+            pass
+        try:
+            return float(val)
+        except Exception:
+            return default
+
+    def _fmt0s(x):
+        val = _safe_int(x)
+        if val is None:
+            return "-"
+        return format_dutch_number(val, 0)
+
+    def _fmt2s(x):
+        val = _safe_float(x)
+        if val is None:
+            return "-"
+        return format_dutch_number(val, 2)
+
+    def _fmt4s(x):
+        val = _safe_float(x)
+        if val is None:
+            return "-"
+        return format_dutch_number(val, 4)
+
+    def _fmt_year(x):
+        val = _safe_int(x)
+        if val is None:
+            return "-"
+        return str(val)
+
+    records: list[dict] = []
+
+    for idx, rec in enumerate(sites.itertuples(index=False), start=1):
+        record = {
+            "h3_index": rec.h3_index,
+            "woonplaats": rec.woonplaats,
+            "gebied_label": rec.gebied_label,
+            "cluster_buildings": int(rec.cluster_buildings),
+            "cap_buildings": int(rec.cap_buildings),
+            "connected_buildings": int(rec.connected_buildings),
+            "cluster_MWh": int(rec.cluster_MWh),
+            "cap_MWh": int(rec.cap_MWh),
+            "connected_MWh": int(rec.connected_MWh),
+            "utilization_pct": int(rec.utilization_pct),
+            "cluster_buildings_fmt": _fmt0s(rec.cluster_buildings),
+            "cap_buildings_fmt": _fmt0s(rec.cap_buildings),
+            "connected_buildings_fmt": _fmt0s(rec.connected_buildings),
+            "cluster_MWh_fmt": _fmt0s(rec.cluster_MWh),
+            "cap_MWh_fmt": _fmt0s(rec.cap_MWh),
+            "connected_MWh_fmt": _fmt0s(rec.connected_MWh),
+            "utilization_pct_fmt": f"{int(rec.utilization_pct)}",
+            "vaste_kosten": float(st.session_state.fixed_cost),
+            "opex": float(st.session_state.opex_pct) / 100.0 * float(st.session_state.fixed_cost),
+            "variabele_kosten": float(rec.connected_MWh) * float(st.session_state.var_cost),
+        }
+
+        record["indicatieve_kosten_site"] = int(
+            round(record["vaste_kosten"] + record["opex"] + record["variabele_kosten"])
+        )
+        record["hex_section_display"] = "none"
+        record["site_section_display"] = "block"
+        record["geo_section_display"] = "none"
+        record["site_rank"] = idx
+
+        cluster_buildings_val = max(record["cluster_buildings"], 0)
+        if cluster_buildings_val > 0:
+            cluster_mwh_val = float(record["cluster_MWh"])
+            avg_mwh_per_pand = cluster_mwh_val / cluster_buildings_val
+        else:
+            avg_mwh_per_pand = 0.0
+        record["MWh_per_pand"] = avg_mwh_per_pand
+        record["MWh_per_pand_fmt"] = _fmt2s(avg_mwh_per_pand)
+
+        hex_ids = list(h3.grid_disk(rec.h3_index, int(k_val)))
+        df_site_hex = df_filtered[df_filtered["h3_index"].isin(hex_ids)].copy()
+
+        coverage_polygons = []
+        coverage_summary: dict[str, Any] = {}
+        coverage_buildings: list[dict[str, Any]] = []
+        coverage_hexes: list[dict[str, Any]] = []
+
+        if hex_ids:
+            try:
+                multi_polys = h3.h3_set_to_multi_polygon(hex_ids, geo_json=True)
+            except Exception:
+                multi_polys = []
+            for poly in multi_polys:
+                for loop in poly:
+                    coords = [[float(pt[1]), float(pt[0])] for pt in loop]
+                    if coords and coords[0] != coords[-1]:
+                        coords.append(coords[0])
+                    coverage_polygons.append(coords)
+
+        if not df_site_hex.empty:
+
+            def _series_sum(df_local: pd.DataFrame, column_name: str, want_int: bool = False):
+                if column_name not in df_local.columns:
+                    return 0
+                vals = pd.to_numeric(df_local[column_name], errors="coerce").fillna(0)
+                total = float(vals.sum())
+                return _safe_int(total, 0) if want_int else _safe_float(total, 0.0)
+
+            def _series_mean(df_local: pd.DataFrame, column_name: str, want_int: bool = False):
+                if column_name not in df_local.columns:
+                    return 0 if want_int else 0.0
+                vals = pd.to_numeric(df_local[column_name], errors="coerce").dropna()
+                if vals.empty:
+                    return 0 if want_int else 0.0
+                avg = float(vals.mean())
+                return _safe_int(avg, 0) if want_int else _safe_float(avg, 0.0)
+
+            total_vbos = _series_sum(df_site_hex, "aantal_VBOs", True)
+            total_huizen = _series_sum(df_site_hex, "aantal_huizen", True)
+            total_mwh = _series_sum(df_site_hex, "gemiddeld_jaarverbruik_mWh")
+            total_oppervlakte = _series_sum(df_site_hex, "totale_oppervlakte", True)
+            total_area_ha = _series_sum(df_site_hex, "area_ha")
+            total_area_m2 = _series_sum(df_site_hex, "area_m2")
+            avg_kwh_m2 = _series_mean(df_site_hex, "kWh_per_m2")
+            avg_bouwjaar = _series_mean(df_site_hex, "bouwjaar", True)
+            avg_density = _series_mean(df_site_hex, "MWh_per_ha")
+            avg_mwh_per_pand_summary = total_mwh / total_huizen if total_huizen else 0.0
+            avg_area_ha = _series_mean(df_site_hex, "area_ha")
+            avg_area_m2 = _series_mean(df_site_hex, "area_m2")
+
+            coverage_summary = {
+                "hex_count": len(df_site_hex),
+                "hex_count_fmt": _fmt0s(len(df_site_hex)),
+                "aantal_VBOs": total_vbos,
+                "aantal_huizen": total_huizen,
+                "aantal_VBOs_fmt": _fmt0s(total_vbos),
+                "aantal_huizen_fmt": _fmt0s(total_huizen),
+                "kWh_per_m2": avg_kwh_m2,
+                "kWh_per_m2_fmt": _fmt0s(avg_kwh_m2),
+                "gemiddeld_jaarverbruik_mWh": total_mwh,
+                "gemiddeld_jaarverbruik_mWh_fmt": _fmt0s(total_mwh),
+                "totale_oppervlakte": total_oppervlakte,
+                "totale_oppervlakte_fmt": _fmt0s(total_oppervlakte),
+                "area_ha_r": avg_area_ha,
+                "area_ha_r_fmt": _fmt4s(avg_area_ha),
+                "area_m2": avg_area_m2,
+                "area_m2_fmt": _fmt0s(avg_area_m2),
+                "area_ha_total": total_area_ha,
+                "area_ha_total_fmt": _fmt2s(total_area_ha),
+                "area_m2_total": total_area_m2,
+                "area_m2_total_fmt": _fmt0s(total_area_m2),
+                "MWh_per_ha": avg_density,
+                "MWh_per_ha_fmt": _fmt2s(avg_density),
+                "bouwjaar": avg_bouwjaar,
+                "bouwjaar_fmt": _fmt_year(avg_bouwjaar),
+                "MWh_per_pand": avg_mwh_per_pand_summary,
+                "MWh_per_pand_fmt": _fmt2s(avg_mwh_per_pand_summary),
+                "site_rank_label": record["site_rank"],
+            }
+
+            for cov_idx, cov in enumerate(df_site_hex.itertuples(index=False), start=1):
+                cov_dict = {
+                    "site_rank": idx,
+                    "sub_rank": cov_idx,
+                    "h3_index": getattr(cov, "h3_index", ""),
+                    "aantal_huizen": _safe_int(getattr(cov, "aantal_huizen", 0), 0) or 0,
+                    "aantal_VBOs": _safe_int(getattr(cov, "aantal_VBOs", 0), 0) or 0,
+                    "MWh_per_ha_r": _safe_float(getattr(cov, "MWh_per_ha_r", 0.0), 0.0) or 0.0,
+                    "gemiddeld_jaarverbruik_mWh_r": _safe_float(getattr(cov, "gemiddeld_jaarverbruik_mWh_r", 0.0), 0.0) or 0.0,
+                    "area_ha_r": _safe_float(getattr(cov, "area_ha_r", 0.0), 0.0) or 0.0,
+                    "area_m2": _safe_float(getattr(cov, "area_m2", 0.0), 0.0) or 0.0,
+                    "kWh_per_m2": _safe_float(getattr(cov, "kWh_per_m2", 0.0), 0.0) or 0.0,
+                    "totale_oppervlakte": _safe_int(getattr(cov, "totale_oppervlakte", 0), 0) or 0,
+                    "bouwjaar": _safe_int(getattr(cov, "bouwjaar", 0), 0) or 0,
+                    "aantal_huizen_fmt": _fmt0s(getattr(cov, "aantal_huizen", 0)),
+                    "aantal_VBOs_fmt": _fmt0s(getattr(cov, "aantal_VBOs", 0)),
+                    "MWh_per_ha_r_fmt": _fmt2s(getattr(cov, "MWh_per_ha_r", 0.0)),
+                    "gemiddeld_jaarverbruik_mWh_r_fmt": _fmt0s(getattr(cov, "gemiddeld_jaarverbruik_mWh_r", 0)),
+                    "area_ha_r_fmt": _fmt4s(getattr(cov, "area_ha_r", 0.0)),
+                    "area_m2_fmt": _fmt0s(getattr(cov, "area_m2", 0.0)),
+                    "kWh_per_m2_fmt": _fmt0s(getattr(cov, "kWh_per_m2", 0)),
+                    "totale_oppervlakte_fmt": _fmt0s(getattr(cov, "totale_oppervlakte", 0)),
+                    "bouwjaar_fmt": _fmt_year(getattr(cov, "bouwjaar", 0)),
+                    "MWh_per_pand": _safe_float(getattr(cov, "MWh_per_pand", 0.0), 0.0) or 0.0,
+                    "MWh_per_pand_fmt": _fmt2s(getattr(cov, "MWh_per_pand", 0.0)),
+                    "hex_section_display": "block",
+                    "site_section_display": "block",
+                    "geo_section_display": "none",
+                    "cluster_buildings": record["cluster_buildings"],
+                    "cap_buildings": record["cap_buildings"],
+                    "connected_buildings": record["connected_buildings"],
+                    "cluster_MWh": record["cluster_MWh"],
+                    "cap_MWh": record["cap_MWh"],
+                    "connected_MWh": record["connected_MWh"],
+                    "utilization_pct": record["utilization_pct"],
+                    "cluster_buildings_fmt": record["cluster_buildings_fmt"],
+                    "cap_buildings_fmt": record["cap_buildings_fmt"],
+                    "connected_buildings_fmt": record["connected_buildings_fmt"],
+                    "cluster_MWh_fmt": record["cluster_MWh_fmt"],
+                    "cap_MWh_fmt": record["cap_MWh_fmt"],
+                    "connected_MWh_fmt": record["connected_MWh_fmt"],
+                    "utilization_pct_fmt": record["utilization_pct_fmt"],
+                    "site_rank": idx,
+                    "site_rank_label": idx,
+                }
+                coverage_hexes.append(cov_dict)
+
+            if "polygon_shape" in df_site_hex.columns:
+                coverage_buildings = df_site_hex.loc[:, ["h3_index", "polygon_shape"]].copy()
+                coverage_buildings["polygon_shape"] = coverage_buildings["polygon_shape"].astype(str)
+                coverage_buildings["site_rank"] = idx
+                coverage_buildings["gebouw_id"] = coverage_buildings.index.astype(int) + 1
+                coverage_buildings = coverage_buildings.to_dict("records")
+
+        record["coverage_polygons"] = coverage_polygons
+        record["coverage_summary"] = coverage_summary
+        record["coverage_buildings"] = coverage_buildings
+        record["coverage_hexes"] = coverage_hexes
+        record["coverage_hex_ids"] = hex_ids
+        record["lat"], record["lon"] = h3.cell_to_latlng(rec.h3_index)
+        records.append(record)
+
+    return records
 
 
 # ========== Hoofdscherm ==========
@@ -397,12 +721,26 @@ if st.session_state.show_map:
     df_filtered["bouwjaar"] = df_filtered["bouwjaar"].round(0)
 
     # Oppervlakte en dichtheid
-    cell_area_ha = area_ha_for_res(res)
-    df_filtered["area_ha"] = float(cell_area_ha)
-    df_filtered["MWh_per_ha"] = df_filtered["gemiddeld_jaarverbruik_mWh"] / df_filtered["area_ha"]
+    area_km2_lookup = {
+        idx: float(h3.cell_area(idx, unit="km^2")) for idx in df_filtered["h3_index"].dropna().unique()
+    }
+    df_filtered["area_km2"] = df_filtered["h3_index"].map(area_km2_lookup).astype("float32")
+    df_filtered["area_ha"] = (df_filtered["area_km2"] * 100.0).astype("float32")
+    df_filtered["area_m2"] = (df_filtered["area_km2"] * 1_000_000.0).astype("float32")
+
+    area_for_density = df_filtered["area_ha"].replace(0, pd.NA)
+    df_filtered["MWh_per_ha"] = (
+        df_filtered["gemiddeld_jaarverbruik_mWh"].div(area_for_density)
+    ).fillna(0.0)
     df_filtered["area_ha_r"] = df_filtered["area_ha"]
     df_filtered["MWh_per_ha_r"] = df_filtered["MWh_per_ha"].round(2)
+    df_filtered.drop(columns=["area_km2"], inplace=True)
     df_filtered["gemiddeld_jaarverbruik_mWh_r"] = df_filtered["gemiddeld_jaarverbruik_mWh"].round(0).astype(int)
+    huizen_nonzero = df_filtered["aantal_huizen"].replace(0, pd.NA)
+    df_filtered["MWh_per_pand"] = (
+        df_filtered["gemiddeld_jaarverbruik_mWh"].div(huizen_nonzero)
+    ).fillna(0.0)
+    df_filtered["MWh_per_pand_r"] = df_filtered["MWh_per_pand"].round(2)
 
     # Compacte dtypes vasthouden om RAM onder controle te houden
     for col, dtype in [
@@ -411,7 +749,10 @@ if st.session_state.show_map:
         ("totale_oppervlakte", "float32"),
         ("MWh_per_ha", "float32"),
         ("MWh_per_ha_r", "float32"),
+        ("MWh_per_pand", "float32"),
+        ("MWh_per_pand_r", "float32"),
         ("area_ha", "float32"),
+        ("area_m2", "float32"),
         ("area_ha_r", "float32"),
     ]:
         if col in df_filtered.columns:
@@ -449,271 +790,142 @@ if st.session_state.show_map:
             "bouwjaar",
             "MWh_per_ha",
             "MWh_per_ha_r",
+            "MWh_per_pand",
+            "MWh_per_pand_r",
             "area_ha",
             "area_ha_r",
+            "area_m2",
         ]
     ]
 
-    # --------- Warmtevoorziening (alleen als toggle aan en woonplaats geselecteerd) ---------
+    # --------- Warmtevoorziening (alleen als toggle aan én woonplaats geselecteerd) ---------
     woonplaatsen_selected = [wp for wp in ui.get("woonplaats_selectie", []) if wp]
-    allow_sites = ui.get("show_sites_layer") and zoom_level >= 11 and woonplaatsen_selected
+    show_sites_layer = ui.get("show_sites_layer")
+    current_sites_mode = ui.get("sites_mode", st.session_state.get("sites_mode", "auto"))
+    manual_mode = current_sites_mode == "manual"
+
+    if show_sites_layer and manual_mode:
+        for payload in [
+            st.session_state.get("main_map_deck_chart_selected_data"),
+            st.session_state.get("main_map_deck_chart"),
+        ]:
+            selected_from_state = _extract_selected_hex_from_payload(payload)
+            if selected_from_state:
+                st.session_state["manual_site_h3"] = selected_from_state
+                break
+
+    allow_sites_auto = show_sites_layer and zoom_level >= 11 and woonplaatsen_selected
+    allow_sites_manual = show_sites_layer and manual_mode
+    allow_sites = allow_sites_auto or allow_sites_manual
     sites_records = []
+    prev_sites_mode = st.session_state.get("_prev_sites_mode")
+    if prev_sites_mode != current_sites_mode:
+        st.session_state["_prev_sites_mode"] = current_sites_mode
+        st.session_state.sites = []
+        st.session_state.sites_costed = []
+        st.session_state.sites_ready = False
+        if current_sites_mode != "manual":
+            st.session_state.pop("manual_site_h3", None)
+
     if allow_sites:
-        compute_requested = ui.get("compute_sites", False)
-        if compute_requested:
-            shortlist_top_frac = 0.85
-            threshold_kwh_m2 = float(ui["threshold"])
-            k_val = int(st.session_state.kring_radius)
-
-            centers_keep = shortlist_centers(df_filtered, threshold_kwh_m2=threshold_kwh_m2, top_frac=shortlist_top_frac)
-            df_for_clusters = df_filtered.merge(centers_keep, on="h3_index", how="inner") if not centers_keep.empty else df_filtered
-
-            cluster_params = {"k": k_val, "threshold": threshold_kwh_m2, "shortlist_frac": shortlist_top_frac}
-            cache_key = filters_fingerprint(cluster_params, df_for_clusters["h3_index"].astype(str).unique())
-
-            cluster_input = df_for_clusters.loc[:, ["h3_index", "gemiddeld_jaarverbruik_mWh", "aantal_huizen"]]
-            clusters = compute_clusters_cached(cache_key, cluster_input, k_val)
-            _log_ram("after_clusters")
-
-            clusters = clusters.merge(
-                df_filtered[["h3_index", "woonplaats", "kWh_per_m2", "aantal_VBOs", "gemiddeld_jaarverbruik_mWh"]],
-                on="h3_index", how="left"
-            )
-
-            sites_df = select_sites_from_clusters(
-                clusters,
-                min_sep_cells=st.session_state.min_sep,
-                topk=st.session_state.n_sites,
-                cap_mwh=float(st.session_state.cap_mwh),
-                cap_buildings=int(st.session_state.cap_buildings),
-                ttl=1800,
-            )
-
-            records = []
-            if sites_df is not None and not sites_df.empty:
-                sites = sites_df.merge(
-                    df_filtered[["h3_index", "woonplaats"]].drop_duplicates(),
-                    on="h3_index", how="left"
-                )
-                sites["gebied_label"] = sites["woonplaats"].fillna("Onbekend")
-
-                def _safe_int(val, default=None):
-                    try:
-                        if val is None:
-                            return default
-                        if isinstance(val, float) and math.isnan(val):
-                            return default
-                    except Exception:
-                        pass
-                    try:
-                        return int(round(float(val)))
-                    except Exception:
-                        return default
-
-                def _safe_float(val, default=None):
-                    try:
-                        if val is None:
-                            return default
-                        if isinstance(val, float) and math.isnan(val):
-                            return default
-                    except Exception:
-                        pass
-                    try:
-                        return float(val)
-                    except Exception:
-                        return default
-
-                def _fmt0s(x):
-                    val = _safe_int(x)
-                    if val is None:
-                        return "-"
-                    return format_dutch_number(val, 0)
-
-                def _fmt2s(x):
-                    val = _safe_float(x)
-                    if val is None:
-                        return "-"
-                    return format_dutch_number(val, 2)
-
-                def _fmt_year(x):
-                    val = _safe_int(x)
-                    if val is None:
-                        return "-"
-                    return str(val)
-
-                for idx, rec in enumerate(sites.itertuples(index=False), start=1):
-                    record = {
-                        "h3_index": rec.h3_index,
-                        "woonplaats": rec.woonplaats,
-                        "gebied_label": rec.gebied_label,
-                        "cluster_buildings": int(rec.cluster_buildings),
-                        "cap_buildings": int(rec.cap_buildings),
-                        "connected_buildings": int(rec.connected_buildings),
-                        "cluster_MWh": int(rec.cluster_MWh),
-                        "cap_MWh": int(rec.cap_MWh),
-                        "connected_MWh": int(rec.connected_MWh),
-                        "utilization_pct": int(rec.utilization_pct),
-                        "cluster_buildings_fmt": _fmt0s(rec.cluster_buildings),
-                        "cap_buildings_fmt": _fmt0s(rec.cap_buildings),
-                        "connected_buildings_fmt": _fmt0s(rec.connected_buildings),
-                        "cluster_MWh_fmt": _fmt0s(rec.cluster_MWh),
-                        "cap_MWh_fmt": _fmt0s(rec.cap_MWh),
-                        "connected_MWh_fmt": _fmt0s(rec.connected_MWh),
-                        "utilization_pct_fmt": f"{int(rec.utilization_pct)}",
-                        "vaste_kosten": float(st.session_state.fixed_cost),
-                        "opex": float(st.session_state.opex_pct) / 100.0 * float(st.session_state.fixed_cost),
-                        "variabele_kosten": float(rec.connected_MWh) * float(st.session_state.var_cost),
-                    }
-                    record["indicatieve_kosten_site"] = int(round(
-                        record["vaste_kosten"] + record["opex"] + record["variabele_kosten"]
-                    ))
-                    record["hex_section_display"] = "none"
-                    record["site_section_display"] = "block"
-                    record["geo_section_display"] = "none"
-                    record["site_rank"] = idx
-
-                    # Voor kaartvisualisatie: neem de volledige k-ring mee
-                    hex_ids = list(h3.grid_disk(rec.h3_index, int(k_val)))
-                    df_site_hex = df_filtered[df_filtered["h3_index"].isin(hex_ids)].copy()
-
-                    coverage_polygons = []
-                    coverage_summary = {}
-                    coverage_buildings = []
-                    coverage_hexes = []
-
-                    if hex_ids:
-                        try:
-                            multi_polys = h3.h3_set_to_multi_polygon(hex_ids, geo_json=True)
-                        except Exception:
-                            multi_polys = []
-                        for poly in multi_polys:
-                            for loop in poly:
-                                coords = [[float(pt[1]), float(pt[0])] for pt in loop]
-                                if coords and coords[0] != coords[-1]:
-                                    coords.append(coords[0])
-                                coverage_polygons.append(coords)
-
-                    if not df_site_hex.empty:
-                        def _series_sum(df_local, column_name, want_int=False):
-                            if column_name not in df_local.columns:
-                                return 0
-                            vals = pd.to_numeric(df_local[column_name], errors="coerce").fillna(0)
-                            total = float(vals.sum())
-                            return _safe_int(total, 0) if want_int else _safe_float(total, 0.0)
-
-                        def _series_mean(df_local, column_name, want_int=False):
-                            if column_name not in df_local.columns:
-                                return 0 if want_int else 0.0
-                            vals = pd.to_numeric(df_local[column_name], errors="coerce").dropna()
-                            if vals.empty:
-                                return 0 if want_int else 0.0
-                            mean_val = float(vals.mean())
-                            return _safe_int(mean_val, 0) if want_int else _safe_float(mean_val, 0.0)
-
-                        total_huizen = _series_sum(df_site_hex, "aantal_huizen", want_int=True)
-                        total_vbos = _series_sum(df_site_hex, "aantal_VBOs", want_int=True)
-                        total_mwh = _series_sum(df_site_hex, "gemiddeld_jaarverbruik_mWh_r", want_int=False)
-                        total_area_ha = _series_sum(df_site_hex, "area_ha_r", want_int=False)
-                        total_oppervlakte = _series_sum(df_site_hex, "totale_oppervlakte", want_int=True)
-                        avg_kwh_m2 = _series_mean(df_site_hex, "kWh_per_m2", want_int=False)
-                        avg_bouwjaar = _series_mean(df_site_hex, "bouwjaar", want_int=True)
-                        mwh_density = total_mwh / total_area_ha if total_area_ha else 0.0
-
-                        coverage_summary = {
-                            "site_rank": idx,
-                            "site_rank_label": idx,
-                            "gebied_label": rec.gebied_label,
-                            "aantal_huizen": total_huizen,
-                            "aantal_VBOs": total_vbos,
-                            "gemiddeld_jaarverbruik_mWh_r": total_mwh,
-                            "area_ha_r": total_area_ha,
-                            "totale_oppervlakte": total_oppervlakte,
-                            "kWh_per_m2": avg_kwh_m2,
-                            "bouwjaar": avg_bouwjaar,
-                            "MWh_per_ha_r": mwh_density,
-                            "aantal_huizen_fmt": _fmt0s(total_huizen),
-                            "aantal_VBOs_fmt": _fmt0s(total_vbos),
-                            "gemiddeld_jaarverbruik_mWh_r_fmt": _fmt0s(total_mwh),
-                            "area_ha_r_fmt": _fmt2s(total_area_ha),
-                            "totale_oppervlakte_fmt": _fmt0s(total_oppervlakte),
-                            "kWh_per_m2_fmt": _fmt0s(avg_kwh_m2),
-                            "MWh_per_ha_r_fmt": _fmt2s(mwh_density),
-                            "bouwjaar_fmt": _fmt_year(avg_bouwjaar),
-                            "hex_section_display": "block",
-                            "site_section_display": "block",
-                            "geo_section_display": "none",
-                        }
-
-                        for cov in df_site_hex.itertuples(index=False):
-                            cov_dict = {
-                                "h3_index": cov.h3_index,
-                                "woonplaats": getattr(cov, "woonplaats", ""),
-                                "aantal_huizen": _safe_int(getattr(cov, "aantal_huizen", 0), 0) or 0,
-                                "aantal_VBOs": _safe_int(getattr(cov, "aantal_VBOs", 0), 0) or 0,
-                                "MWh_per_ha_r": _safe_float(getattr(cov, "MWh_per_ha_r", 0.0), 0.0) or 0.0,
-                                "gemiddeld_jaarverbruik_mWh_r": _safe_float(getattr(cov, "gemiddeld_jaarverbruik_mWh_r", 0.0), 0.0) or 0.0,
-                                "area_ha_r": _safe_float(getattr(cov, "area_ha_r", 0.0), 0.0) or 0.0,
-                                "kWh_per_m2": _safe_float(getattr(cov, "kWh_per_m2", 0.0), 0.0) or 0.0,
-                                "totale_oppervlakte": _safe_int(getattr(cov, "totale_oppervlakte", 0), 0) or 0,
-                                "bouwjaar": _safe_int(getattr(cov, "bouwjaar", 0), 0) or 0,
-                                "aantal_huizen_fmt": _fmt0s(getattr(cov, "aantal_huizen", 0)),
-                                "aantal_VBOs_fmt": _fmt0s(getattr(cov, "aantal_VBOs", 0)),
-                                "MWh_per_ha_r_fmt": _fmt2s(getattr(cov, "MWh_per_ha_r", 0.0)),
-                                "gemiddeld_jaarverbruik_mWh_r_fmt": _fmt0s(getattr(cov, "gemiddeld_jaarverbruik_mWh_r", 0)),
-                                "area_ha_r_fmt": _fmt2s(getattr(cov, "area_ha_r", 0.0)),
-                                "kWh_per_m2_fmt": _fmt0s(getattr(cov, "kWh_per_m2", 0)),
-                                "totale_oppervlakte_fmt": _fmt0s(getattr(cov, "totale_oppervlakte", 0)),
-                                "bouwjaar_fmt": _fmt_year(getattr(cov, "bouwjaar", 0)),
-                                "hex_section_display": "block",
-                                "site_section_display": "block",
-                                "geo_section_display": "none",
-                                "cluster_buildings": record["cluster_buildings"],
-                                "cap_buildings": record["cap_buildings"],
-                                "connected_buildings": record["connected_buildings"],
-                                "cluster_MWh": record["cluster_MWh"],
-                                "cap_MWh": record["cap_MWh"],
-                                "connected_MWh": record["connected_MWh"],
-                                "utilization_pct": record["utilization_pct"],
-                                "cluster_buildings_fmt": record["cluster_buildings_fmt"],
-                                "cap_buildings_fmt": record["cap_buildings_fmt"],
-                                "connected_buildings_fmt": record["connected_buildings_fmt"],
-                                "cluster_MWh_fmt": record["cluster_MWh_fmt"],
-                                "cap_MWh_fmt": record["cap_MWh_fmt"],
-                                "connected_MWh_fmt": record["connected_MWh_fmt"],
-                                "utilization_pct_fmt": record["utilization_pct_fmt"],
-                                "site_rank": idx,
-                                "site_rank_label": idx,
-                            }
-                            coverage_hexes.append(cov_dict)
-
-                        if "polygon_shape" in df_site_hex.columns:
-                            coverage_buildings = df_site_hex.loc[:, ["h3_index", "polygon_shape"]].copy()
-                            coverage_buildings["polygon_shape"] = coverage_buildings["polygon_shape"].astype(str)
-                            coverage_buildings["site_rank"] = idx
-                            coverage_buildings["gebouw_id"] = coverage_buildings.index.astype(int) + 1
-                            coverage_buildings = coverage_buildings.to_dict("records")
-
-                    record["coverage_polygons"] = coverage_polygons
-                    record["coverage_summary"] = coverage_summary
-                    record["coverage_buildings"] = coverage_buildings
-                    record["coverage_hexes"] = coverage_hexes
-                    record["coverage_hex_ids"] = hex_ids
-                    record["lat"], record["lon"] = h3.cell_to_latlng(rec.h3_index)
-                    records.append(record)
-
-            st.session_state.sites = records
-            st.session_state.sites_costed = records
-            st.session_state.sites_ready = bool(records)
-            del cluster_input, clusters, sites_df
-        elif not st.session_state.get("sites_ready"):
+        if ui.get("reset_manual_site"):
+            st.session_state.pop("manual_site_h3", None)
             st.session_state.sites = []
             st.session_state.sites_costed = []
+            st.session_state.sites_ready = False
+
+        sites_mode = current_sites_mode or "auto"
+        k_val = int(st.session_state.kring_radius)
+
+        if sites_mode == "auto":
+            compute_requested = ui.get("compute_sites", False)
+            if compute_requested:
+                shortlist_top_frac = 0.85
+                threshold_kwh_m2 = float(ui["threshold"])
+
+                centers_keep = shortlist_centers(df_filtered, threshold_kwh_m2=threshold_kwh_m2, top_frac=shortlist_top_frac)
+                df_for_clusters = df_filtered.merge(centers_keep, on="h3_index", how="inner") if not centers_keep.empty else df_filtered
+
+                cluster_params = {"k": k_val, "threshold": threshold_kwh_m2, "shortlist_frac": shortlist_top_frac}
+                cache_key = filters_fingerprint(cluster_params, df_for_clusters["h3_index"].astype(str).unique())
+
+                cluster_input = df_for_clusters.loc[:, ["h3_index", "gemiddeld_jaarverbruik_mWh", "aantal_huizen"]]
+                clusters = compute_clusters_cached(cache_key, cluster_input, k_val)
+                _log_ram("after_clusters")
+
+                clusters = clusters.merge(
+                    df_filtered[["h3_index", "woonplaats", "kWh_per_m2", "aantal_VBOs", "gemiddeld_jaarverbruik_mWh"]],
+                    on="h3_index",
+                    how="left",
+                )
+
+                sites_df = select_sites_from_clusters(
+                    clusters,
+                    min_sep_cells=st.session_state.min_sep,
+                    topk=st.session_state.n_sites,
+                    cap_mwh=float(st.session_state.cap_mwh),
+                    cap_buildings=int(st.session_state.cap_buildings),
+                    ttl=1800,
+                )
+
+                records = _build_site_records(sites_df, df_filtered, k_val)
+                st.session_state.sites = records
+                st.session_state.sites_costed = records
+                st.session_state.sites_ready = bool(records)
+                del cluster_input, clusters, sites_df
+            elif not st.session_state.get("sites_ready"):
+                st.session_state.sites = []
+                st.session_state.sites_costed = []
+        else:
+            manual_hex = st.session_state.get("manual_site_h3")
+            if manual_hex:
+                cluster_input_manual = df_filtered.loc[:, ["h3_index", "gemiddeld_jaarverbruik_mWh", "aantal_huizen"]]
+                manual_cache_key = filters_fingerprint(
+                    {"mode": "manual", "k": k_val},
+                    cluster_input_manual["h3_index"].astype(str).unique(),
+                )
+                clusters_all = compute_clusters_cached(manual_cache_key, cluster_input_manual, k_val)
+                manual_cluster = clusters_all[clusters_all["h3_index"] == manual_hex].copy()
+                if manual_cluster.empty:
+                    manual_cluster = pd.DataFrame(
+                        [{
+                            "h3_index": manual_hex,
+                            "cluster_MWh": 0,
+                            "cluster_buildings": 0,
+                        }]
+                    )
+
+                cap_mwh_val = float(st.session_state.cap_mwh)
+                cap_buildings_val = int(st.session_state.cap_buildings)
+
+                manual_cluster["cluster_MWh"] = pd.to_numeric(manual_cluster["cluster_MWh"], errors="coerce").fillna(0).astype("int32")
+                manual_cluster["cluster_buildings"] = pd.to_numeric(manual_cluster["cluster_buildings"], errors="coerce").fillna(0).astype("int32")
+
+                manual_sites_df = select_sites_from_clusters(
+                    manual_cluster,
+                    min_sep_cells=0,
+                    topk=1,
+                    cap_mwh=cap_mwh_val,
+                    cap_buildings=cap_buildings_val,
+                    ttl=1800,
+                )
+
+                records = _build_site_records(manual_sites_df, df_filtered, k_val)
+                st.session_state.sites = records
+                st.session_state.sites_costed = records
+                st.session_state.sites_ready = bool(records)
+            else:
+                st.session_state.sites = []
+                st.session_state.sites_costed = []
+                st.session_state.sites_ready = False
+
         if st.session_state.get("sites_ready"):
             sites_records = st.session_state.sites
     else:
         st.session_state.sites = []
         st.session_state.sites_costed = []
         st.session_state.sites_ready = False
+        st.session_state.pop("manual_site_h3", None)
 
     if not st.session_state.get("sites_ready"):
         sites_records = []
@@ -746,7 +958,9 @@ if st.session_state.show_map:
         "aantal_VBOs",
         "MWh_per_ha_r",
         "gemiddeld_jaarverbruik_mWh_r",
+        "MWh_per_pand_r",
         "area_ha_r",
+        "area_m2",
         "kWh_per_m2",
         "totale_oppervlakte",
         "bouwjaar",
@@ -759,11 +973,16 @@ if st.session_state.show_map:
     def _fmt2_val(series):
         return series.astype("float32").map(lambda v: format_dutch_number(float(v), 2))
 
+    def _fmt4_val(series):
+        return series.astype("float32").map(lambda v: format_dutch_number(float(v), 4))
+
     df_hex_view["aantal_huizen_fmt"]                = _fmt0_val(df_hex_view["aantal_huizen"])
     df_hex_view["aantal_VBOs_fmt"]                  = _fmt0_val(df_hex_view["aantal_VBOs"])
     df_hex_view["MWh_per_ha_r_fmt"]                 = _fmt2_val(df_hex_view["MWh_per_ha_r"])
     df_hex_view["gemiddeld_jaarverbruik_mWh_r_fmt"] = _fmt0_val(df_hex_view["gemiddeld_jaarverbruik_mWh_r"])
-    df_hex_view["area_ha_r_fmt"]                    = _fmt2_val(df_hex_view["area_ha_r"])
+    df_hex_view["MWh_per_pand_fmt"]                 = _fmt2_val(df_hex_view["MWh_per_pand_r"])
+    df_hex_view["area_ha_r_fmt"]                    = _fmt4_val(df_hex_view["area_ha_r"])
+    df_hex_view["area_m2_fmt"]                      = _fmt0_val(df_hex_view["area_m2"].round().astype("int64"))
     df_hex_view["kWh_per_m2_fmt"]                   = _fmt0_val(df_hex_view["kWh_per_m2"])
     df_hex_view["totale_oppervlakte_fmt"]           = _fmt0_val(df_hex_view["totale_oppervlakte"])
     df_hex_view["bouwjaar_fmt"]                     = df_hex_view["bouwjaar"].astype("int64").map(lambda v: str(int(v)))
@@ -780,6 +999,7 @@ if st.session_state.show_map:
         "aantal_huizen",
         "aantal_VBOs",
         "MWh_per_ha_r",
+        "MWh_per_pand_r",
         "gemiddeld_jaarverbruik_mWh_r",
         "area_ha_r",
         "kWh_per_m2",
@@ -788,8 +1008,10 @@ if st.session_state.show_map:
         "aantal_huizen_fmt",
         "aantal_VBOs_fmt",
         "MWh_per_ha_r_fmt",
+        "MWh_per_pand_fmt",
         "gemiddeld_jaarverbruik_mWh_r_fmt",
         "area_ha_r_fmt",
+        "area_m2_fmt",
         "kWh_per_m2_fmt",
         "totale_oppervlakte_fmt",
         "bouwjaar_fmt",
@@ -814,7 +1036,8 @@ if st.session_state.show_map:
 
     # Basemap
     hide_bg = bool(ui.get("hide_basemap"))
-    base_layers = build_base_layers(ui.get("map_style"), hide_bg)
+    basemap_style = ui.get("basemap_style", ui.get("map_style"))
+    base_layers = build_base_layers(basemap_style, hide_bg)
 
     # Volgorde: basemap -> bodem -> woonlagen -> H3/indicatief/sites
     all_layers = base_layers + bodem_layers + extra_layers + layers + site_layers
@@ -822,6 +1045,10 @@ if st.session_state.show_map:
     # ========== ViewState ==========
     def _view_for_selection(df_full, woonplaatsen_geselecteerd):
         """Bepaal kaartcentrum en zoom op basis van de huidige selectie."""
+        manual_hex_current = st.session_state.get("manual_site_h3")
+        if current_sites_mode == "manual" and manual_hex_current:
+            lat_manual, lon_manual = h3.cell_to_latlng(manual_hex_current)
+            return lat_manual, lon_manual, 12.0
         friesland_center = (53.125, 5.75)
         friesland_zoom = 8
         min_zoom, max_zoom = 8, 12.0
@@ -848,18 +1075,22 @@ if st.session_state.show_map:
         elif span > 0.5:
             zoom = 9.0
         elif span > 0.25:
-            zoom = 9.0
+            zoom = 9.5
         elif span > 0.12:
             zoom = 10.0
-        else:
+        elif span > 0.06:
             zoom = 11.0
+        elif span > 0.03:
+            zoom = 12.0
+        else:
+            zoom = 13.0
         zoom = max(min_zoom, min(max_zoom, zoom))
         return lat_center, lon_center, zoom
 
     lat, lon, zoom = _view_for_selection(df_view_source, ui["woonplaats_selectie"])
     st.session_state.view_state = pdk.ViewState(
         longitude=lon, latitude=lat, zoom=zoom,
-        min_zoom=7.5, max_zoom=14, pitch=0, bearing=0,
+        min_zoom=7.5, max_zoom=16, pitch=0, bearing=0,
     )
 
     # ========== KPI ==========
@@ -867,7 +1098,7 @@ if st.session_state.show_map:
         render_kpis(df_filtered, st.session_state.participatie)
 
     # ========== Kaart render + cleanup ==========
-    deck_kwargs = {"map_style": "blank" if hide_bg else None}
+    deck_kwargs = {"map_style": ui.get("map_style")}
 
     with map_container:
         deck = pdk.Deck(
@@ -876,7 +1107,34 @@ if st.session_state.show_map:
             tooltip=build_deck_tooltip(),
             **deck_kwargs,
         )
-        st.pydeck_chart(deck, use_container_width=True)
+
+        manual_selection_active = show_sites_layer and manual_mode
+        chart_key = "main_map_deck_chart"
+        chart_kwargs = {
+            "use_container_width": True,
+            "key": chart_key,
+        }
+        if manual_selection_active:
+            chart_kwargs.update(
+                selection_mode="single-object",
+                on_select="rerun",
+            )
+        chart_state = st.pydeck_chart(deck, **chart_kwargs)
+
+        if manual_selection_active:
+            selected_hex = None
+            payload_candidates = [
+                st.session_state.get(f"{chart_key}_selected_data"),
+                st.session_state.get(chart_key),
+                getattr(chart_state, "selection", None),
+                chart_state,
+            ]
+            for payload in payload_candidates:
+                selected_hex = _extract_selected_hex_from_payload(payload)
+                if selected_hex:
+                    break
+            if selected_hex and st.session_state.get("manual_site_h3") != selected_hex:
+                st.session_state["manual_site_h3"] = selected_hex
 
     # Opruimen om RAM-pieken terug te geven
     del deck, all_layers, layers, base_layers, bodem_layers, extra_layers, df_hex_view

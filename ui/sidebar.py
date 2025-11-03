@@ -11,12 +11,43 @@ from core.config import LAYER_CFG, BASEMAP_CFG
 from core.utils import (
     format_dutch_number,
     get_dynamic_resolution,
-    get_hexagon_size,
+    get_hexagon_metrics,
     get_layer_colors,
     legend_labels_from_breaks,
     render_mini_legend,
     text_input_int,
 )
+
+# ---------------------------
+# Dark mode (helper)
+# ---------------------------
+def _is_dark_mode() -> bool:
+    try:
+        base = st.get_option("theme.base")
+        if isinstance(base, str) and base.lower() == "dark":
+            return True
+    except Exception:
+        pass
+    map_style = st.session_state.get("map_style")
+    if isinstance(map_style, str) and "dark" in map_style.lower():
+        return True
+    return False
+ 
+ 
+def _legend_theme_colors(dark_mode: bool) -> dict[str, str]:
+    if dark_mode:
+        return {
+            "bg": "#111827",
+            "border": "#374151",
+            "text": "#f9fafb",
+            "muted": "#d1d5db",
+        }
+    return {
+        "bg": "#ffffff",
+        "border": "#e5e7eb",
+        "text": "#111827",
+        "muted": "#4b5563",
+    }
 
 # ---------------------------
 # Kleine helpers (RAM-zuinig)
@@ -43,17 +74,24 @@ def _fillna_categorical(df_in: pd.DataFrame, col: str, value: str = "Onbekend") 
     return df_in
 
 
-def _render_big_legend(current_threshold: int):
+def _render_big_legend(current_threshold: int, *, dark_mode: bool):
     """Render de hoofdlegenda voor de warmtevraaglaag."""
+    colors = _legend_theme_colors(dark_mode)
+    bg = colors["bg"]
+    border = colors["border"]
+    text = colors["text"]
+    muted = colors["muted"]
+    pot_color = "#B14470" if dark_mode else "#3A1B2F"
     legend_html = f"""
         <style>
             .legend {{
-                background: white; padding: 10px; border-radius: 8px;
-                font-family: Arial, sans-serif; font-size: 12px; color: black;
-                border: 1px solid #e5e5e5; margin-bottom: 15px;
+                background: {bg}; padding: 10px; border-radius: 8px;
+                font-family: Arial, sans-serif; font-size: 12px; color: {text};
+                border: 1px solid {border}; margin-bottom: 15px;
             }}
-            .legend-title {{ font-weight: bold; margin-bottom: 10px; display: block; }}
-            .color-box {{ width: 15px; height: 15px; display: inline-block; margin-right: 5px; }}
+            .legend-title {{ font-weight: bold; margin-bottom: 10px; display: block; color:{text}; }}
+            .color-box {{ width: 15px; height: 15px; display: inline-block; margin-right: 5px; border-radius:3px; border:1px solid {border}; }}
+            .legend-text-muted {{ color: {muted}; }}
         </style>
         <div class="legend">
             <div class="legend-title">
@@ -62,46 +100,52 @@ def _render_big_legend(current_threshold: int):
             <div><span class="color-box" style="background-color: #4575b4;"></span> &lt; 10,0 kWh/m²</div>
             <div><span class="color-box" style="background-color: #fee090;"></span> 10,0 - 50,0 kWh/m²</div>
             <div><span class="color-box" style="background-color: #d73027;"></span> 50,0 - {current_threshold} (grenswaarde) kWh/m²</div>
-            <div><span class="color-box" style="background-color: #3A1B2f;"></span> Potentie grenswaarde: {current_threshold} kWh/m²</div>
+            <div><span class="color-box" style="background-color: {pot_color};"></span> Potentie grenswaarde: {current_threshold} kWh/m²</div>
         </div>
     """
     st.markdown(legend_html, unsafe_allow_html=True)
 
 
-def _render_bodem_legend(show_spoor: bool, show_water: bool):
+def _render_bodem_legend(show_spoor: bool, show_water: bool, *, dark_mode: bool):
     """Toon de legenda voor spoor- en waterlagen wanneer deze actief zijn."""
     from core.utils import _spoor_rgb_from_cfg
     r_s, g_s, b_s = _spoor_rgb_from_cfg(st.session_state.LAYER_CFG)
     wc = st.session_state.LAYER_CFG["waterdeel"]["palette"]
     r_w, g_w, b_w = int(wc[0]), int(wc[1]), int(wc[2])
-
+ 
     big_class = "ea-legend-wide" if show_water else "ea-legend"
     rows_html = ""
     if show_spoor:
         rows_html += f'<div class="ea-row"><span class="ea-line" style="background:rgba({r_s},{g_s},{b_s},1);"></span> Spoor</div>'
     if show_water:
         rows_html += f'<div class="ea-row"><span class="ea-box" style="background:rgba({r_w},{g_w},{b_w},0.75); border:1px solid rgba({r_w},{g_w},{b_w},1);"></span> Water (polygoon)</div>'
-
+ 
     if not rows_html:
         return
-
+ 
+    colors = _legend_theme_colors(dark_mode)
+    bg = colors["bg"]
+    border = colors["border"]
+    text = colors["text"]
+    muted = colors["muted"]
     html = f"""
-    <style>
+<style>
     .ea-legend, .ea-legend-wide {{
-        background:#fff; border:1px solid #e5e7eb; border-radius:12px;
+        background:{bg}; border:1px solid {border}; border-radius:12px;
         padding:10px; font-family:Arial; font-size:12px; margin-bottom:20px;
-        box-shadow: 0 1px 0 rgba(0,0,0,0.03);
+        box-shadow: 0 1px 0 rgba(0,0,0,0.03); color:{text};
     }}
     .ea-legend-wide {{ padding:14px 16px; font-size:13px; border-width: 1.5px; }}
     .ea-row {{ display:flex; align-items:center; margin:6px 0; }}
     .ea-line {{ width:30px; height:3px; display:inline-block; margin-right:8px; border-radius:2px; }}
     .ea-box  {{ width:16px; height:12px; display:inline-block; margin-right:8px; border-radius:3px; }}
-    .ea-title {{ font-weight:700; margin-bottom:6px; }}
-    </style>
-    <div class="{big_class}">
-      <div class="ea-title">Bodemlagen</div>
+    .ea-title {{ font-weight:700; margin-bottom:6px; color:{text}; }}
+    .ea-row {{ color:{text}; }}
+</style>
+<div class="{big_class}">
+<div class="ea-title">Bodemlagen</div>
       {rows_html}
-    </div>
+</div>
     """
     st.markdown(html, unsafe_allow_html=True)
 
@@ -109,12 +153,11 @@ def _render_bodem_legend(show_spoor: bool, show_water: bool):
 # ---------------------------
 # Hoofdfunctie
 # ---------------------------
-def build_sidebar(df_in: pd.DataFrame) -> Tuple[pd.DataFrame, Dict[str, Any], bool]:
+def build_sidebar(df_in: pd.DataFrame) -> Tuple[pd.DataFrame, Dict[str, Any]]:
     """
     Bouwt de volledige sidebar en retourneert:
       - df (gefilterd)
       - ui (dict met alle gekozen waarden)
-      - button_clicked (True als de gebruiker op 'Maak Kaart' drukt)
     """
     st.session_state.setdefault("grenswaarde_input", 100)
     st.session_state.setdefault("participatie", 80)
@@ -122,29 +165,70 @@ def build_sidebar(df_in: pd.DataFrame) -> Tuple[pd.DataFrame, Dict[str, Any], bo
     st.session_state.setdefault("BASEMAP_CFG", BASEMAP_CFG)
 
     ui: Dict[str, Any] = {}
-    button_clicked = False
 
     with st.sidebar:
-        button_clicked = st.button("Maak kaart")
+        dark_mode = _is_dark_mode()
         st.header("Opties")
 
         # ---------------- Kaart ----------------
         with st.expander("Kaart", expanded=True):
-            ui["zoom_level"] = st.slider("Selecteer zoomniveau", min_value=9, max_value=12, value=10)
+            ui["zoom_level"] = st.slider("Selecteer zoomniveau", min_value=9, max_value=13, value=10)
             ui["resolution"] = get_dynamic_resolution(ui["zoom_level"])
-            hexagon_size = get_hexagon_size(ui["zoom_level"])
-            st.markdown(
-                f"<span style='font-size: 12px;'>Bij <b>zoomniveau {ui['zoom_level']}</b> is de kaart <b>ongeveer {hexagon_size} km breed</b>.</span>",
-                unsafe_allow_html=True
-            )
+            zoom_copy = ui["zoom_level"]
+            zoom_to_width_km = {
+                9: 17,
+                10: 8,
+                11: 4,
+                12: 2,
+                13: 1,
+            }
+            approx_width_km = zoom_to_width_km.get(zoom_copy)
+            if approx_width_km is not None:
+                headline = (
+                    f"Bij <b>zoomniveau {zoom_copy}</b> is de kaart bij eerste weergave ongeveer "
+                    f"<b>{approx_width_km} km</b> breed."
+                )
+            else:
+                headline = (
+                    f"Bij <b>zoomniveau {zoom_copy}</b> zoom je verder in; gebruik scroll/pinch voor extra detail."
+                )
+            st.markdown(f"<span style='font-size: 12px;'>{headline}</span>", unsafe_allow_html=True)
             with st.expander("Uitleg over zoomniveau"):
                 st.write(
-                    "Het zoomniveau bepaalt de mate van detail op de kaart:\n"
-                    "- **9 en 10**: Specifieke buurten en industriegebieden zijn herkenbaar voor heel Friesland. \n"
-                    "- **11 en 12**: Straatniveau. Vanaf dit niveau kan er worden gefilterd op gemeente en woonplaats. \n\n"
-                    "De zoomniveaus zijn afgestemd op de vaste resoluties van het H3-grid en op de gewenste weergave op de kaart."
+                    "Het zoomniveau bepaalt hoeveel detail de kaart toont:\n"
+                    "- **9–10:** Overzicht van buurten en industriegebieden in Friesland.\n"
+                    "- **11–13:** Straatniveau met H3-resolutie 13 voor maximale details.\n\n"
+                    "Elk zoomniveau heeft een vaste H3-resolutie. "
+                    "Je kunt in- of uitzoomen voor visueel detail, maar de H3-resolutie blijft gelijk."
                 )
             ui["extruded"] = st.toggle("3D Weergave", value=False, key="extruded")
+            brt_default = st.session_state.get("use_brt_basemap", False)
+            brt_enabled = st.toggle(
+                "Toon BRT Achtergrondkaart",
+                value=bool(brt_default),
+                help="Gebruik de BRT Achtergrondkaart als achtergrondlaag."
+            )
+            ui["use_brt_basemap"] = brt_enabled
+            st.session_state["use_brt_basemap"] = brt_enabled
+
+            theme_base = None
+            try:
+                theme_base = st.get_option("theme.base")
+            except Exception:
+                theme_base = None
+            dark_theme = isinstance(theme_base, str) and theme_base.lower() == "dark"
+
+            map_theme = "dark" if dark_theme else "light"
+            basemap_style = "brt" if brt_enabled else map_theme
+            if brt_enabled:
+                style_desc = BASEMAP_CFG.get("brt", {}).get("legend_html")
+                if style_desc:
+                    st.caption(style_desc)
+            map_style_value = BASEMAP_CFG.get("brt", {}).get("map_style") if brt_enabled else map_theme
+            ui["map_style"] = map_style_value
+            st.session_state["map_style"] = map_style_value
+            ui["basemap_style"] = basemap_style
+            st.session_state["basemap_style"] = basemap_style
 
         # ---------------- Lagen ----------------
         with st.expander("Lagen", expanded=True):
@@ -152,7 +236,7 @@ def build_sidebar(df_in: pd.DataFrame) -> Tuple[pd.DataFrame, Dict[str, Any], bo
             ui["show_main_layer"] = st.toggle("Energieverbruik", value=True, key="show_main_layer")
 
             current_threshold = st.session_state["grenswaarde_input"]
-            _render_big_legend(current_threshold)
+            _render_big_legend(current_threshold, dark_mode=dark_mode)
 
             ui["show_indicative_layer"] = st.toggle("Aandachtsgebieden tonen", value=True, key="show_indicative_layer")
             ui["threshold"] = st.number_input(
@@ -179,21 +263,21 @@ def build_sidebar(df_in: pd.DataFrame) -> Tuple[pd.DataFrame, Dict[str, Any], bo
                 c = LAYER_CFG["energiearmoede"]
                 colors = get_layer_colors(c)
                 labels = legend_labels_from_breaks(c["breaks"])
-                render_mini_legend(c["legend_title"], colors, labels)
+                render_mini_legend(c["legend_title"], colors, labels, dark_mode=dark_mode)
 
             show_koopwoningen = st.toggle("Koopwoningen", value=False, key=LAYER_CFG["koopwoningen"]["toggle_key"])
             if show_koopwoningen:
                 c = LAYER_CFG["koopwoningen"]
                 colors = get_layer_colors(c)
                 labels_kw = legend_labels_from_breaks(c["breaks"])
-                render_mini_legend(c["legend_title"], colors, labels_kw)
+                render_mini_legend(c["legend_title"], colors, labels_kw, dark_mode=dark_mode)
 
             show_corporatie = st.toggle("Wooncorporatie", value=False, key=LAYER_CFG["wooncorporatie"]["toggle_key"])
             if show_corporatie:
                 c = LAYER_CFG["wooncorporatie"]
                 colors = get_layer_colors(c)
                 labels_wc = legend_labels_from_breaks(c["breaks"])
-                render_mini_legend(c["legend_title"], colors, labels_wc)
+                render_mini_legend(c["legend_title"], colors, labels_wc, dark_mode=dark_mode)
 
             if show_energiearmoede or show_koopwoningen or show_corporatie:
                 ui["extra_opacity"] = st.slider(
@@ -216,7 +300,7 @@ def build_sidebar(df_in: pd.DataFrame) -> Tuple[pd.DataFrame, Dict[str, Any], bo
             if ui["show_waterlaag"]:
                 ui["water_opacity"] = st.slider("Transparantie waterlaag", 0.1, 1.0, 0.6, key="water_opacity")
 
-            _render_bodem_legend(ui["show_spoorlaag"], ui["show_waterlaag"])
+            _render_bodem_legend(ui["show_spoorlaag"], ui["show_waterlaag"], dark_mode=dark_mode)
 
         # ---------------- Filters ----------------
         with st.expander("Filters", expanded=False):
@@ -243,7 +327,7 @@ def build_sidebar(df_in: pd.DataFrame) -> Tuple[pd.DataFrame, Dict[str, Any], bo
                         gemeente_default = [gemeente_opties[0]]
                     else:
                         gemeente_default = []
-                
+
                 if ui["zoom_level"] <= 10:
                     _ = st.multiselect(
                         "Filter op gemeente:",
@@ -265,7 +349,7 @@ def build_sidebar(df_in: pd.DataFrame) -> Tuple[pd.DataFrame, Dict[str, Any], bo
                         gemeente_selectie = gemeente_default or gemeente_opties
                     prev_gemeente_set = set(prev_gemeente_selectie or [])
                     current_gemeente_set = set(gemeente_selectie)
-                    gemeente_changed= current_gemeente_set != prev_gemeente_set
+                    gemeente_changed = current_gemeente_set != prev_gemeente_set
                     st.session_state["_prev_gemeente_selectie"] = gemeente_selectie
                     mask_gemeente = gemeenten_series.astype(str).isin(gemeente_selectie)
             if ui["zoom_level"] <= 10:
@@ -368,10 +452,11 @@ def build_sidebar(df_in: pd.DataFrame) -> Tuple[pd.DataFrame, Dict[str, Any], bo
         # ---------------- Collectieve warmtevoorziening (analyse) ----------------
         selected_places_prior = ui.get("woonplaats_selectie") or st.session_state.get("woonplaats_selectie", [])
         can_analyse = (ui["zoom_level"] >= 11) and bool(selected_places_prior)
-        info_html = "<p style='font-size:12px; color:#6b7280; margin-bottom:8px;'>Analyse alleen beschikbaar bij zoomniveau 11 en 12.</p>"
+        info_html = "<p style='font-size:12px; color:#6b7280; margin-bottom:8px;'>Analyse beschikbaar vanaf zoomniveau 11.</p>"
 
         with st.expander("Collectieve warmtevoorziening (analyse)", expanded=False):
             compute_sites = False
+            reset_manual = False
             if not can_analyse:
                 st.markdown(info_html, unsafe_allow_html=True)
                 ui["show_sites_layer"] = False
@@ -385,27 +470,77 @@ def build_sidebar(df_in: pd.DataFrame) -> Tuple[pd.DataFrame, Dict[str, Any], bo
                 )
 
                 if ui["show_sites_layer"]:
-                    if not st.session_state.get("sites_ready"):
-                        st.info("Stel eerst de filters in en zorg dat de kaart zichtbaar is om warmtevoorzieningen te tonen.")
-                    compute_sites = st.button("Bereken warmtevoorzieningen", key="compute_sites_button")
+                    analysis_metrics = get_hexagon_metrics(ui["zoom_level"])
+                    mode_options = {
+                        "auto": "Automatisch berekenen (hoogste MWh)",
+                        "manual": "Handmatig kiezen op de kaart",
+                    }
+                    default_mode = st.session_state.get("sites_mode", "auto")
+                    if default_mode not in mode_options:
+                        default_mode = "auto"
+                    ui["sites_mode"] = st.radio(
+                        "Kies de methode",
+                        options=list(mode_options.keys()),
+                        index=list(mode_options.keys()).index(default_mode),
+                        format_func=lambda key: mode_options[key],
+                        key="sites_mode"
+                    )
 
+                    if ui["sites_mode"] == "auto":
+                        if not st.session_state.get("sites_ready"):
+                            st.info("Stel eerst de filters in en zorg dat de kaart zichtbaar is om warmtevoorzieningen te tonen.")
+                        compute_sites = st.button("Bereken warmtevoorzieningen", key="compute_sites_button")
+                    else:
+                        st.info("Klik op een hexagon in de kaart om deze als startpunt voor de warmtevoorziening te gebruiken.")
+                        reset_manual = st.button("Wis handmatige selectie", key="reset_manual_site")
+                        current_manual = st.session_state.get("manual_site_h3")
+                        st.caption(f"Geselecteerde H3-index: `{current_manual or 'geen'}`")
+
+                    max_k_ring = 10 if ui["sites_mode"] == "manual" else 5
                     prev_kring = int(st.session_state.get("kring_radius", 3))
-                    if prev_kring > 5:
-                        prev_kring = 5
+                    if prev_kring > max_k_ring:
+                        prev_kring = max_k_ring
                         st.session_state.kring_radius = prev_kring
-                    ui["kring_radius"] = st.slider("Bereik van de warmtevoorziening", 1, 5, prev_kring, 1, key="kring_radius")
+                    if prev_kring < 1:
+                        prev_kring = 1
+                        st.session_state.kring_radius = prev_kring
+                    ui["kring_radius"] = st.slider(
+                        "Bereik van de warmtevoorziening",
+                        1,
+                        max_k_ring,
+                        prev_kring,
+                        1,
+                        key="kring_radius"
+                    )
 
-                    prev_min_sep = int(st.session_state.get("min_sep", 3))
-                    if prev_min_sep > 5:
-                        prev_min_sep = 5
-                        st.session_state.min_sep = prev_min_sep
-                    ui["min_sep"] = st.slider("Minimale afstand tussen warmtevoorzieningen", 1, 5, prev_min_sep, 1, key="min_sep")
-                    # Bewaar bestaande keuze maar klem deze binnen nieuwe grenzen
-                    prev_n_sites = int(st.session_state.get("n_sites", 3))
-                    if prev_n_sites > 20:
-                        prev_n_sites = 20
-                        st.session_state.n_sites = prev_n_sites
-                    ui["n_sites"] = st.number_input("Aantal collectieve warmtevoorzieningen", min_value=1, max_value=20, value=prev_n_sites, step=1, key="n_sites")
+                    if ui["sites_mode"] == "auto":
+                        prev_min_sep = int(st.session_state.get("min_sep", 3))
+                        if prev_min_sep > 5:
+                            prev_min_sep = 5
+                            st.session_state.min_sep = prev_min_sep
+                        ui["min_sep"] = st.slider(
+                            "Minimale afstand tussen warmtevoorzieningen",
+                            1,
+                            5,
+                            prev_min_sep,
+                            1,
+                            key="min_sep",
+                        )
+                        prev_n_sites = int(st.session_state.get("n_sites", 3))
+                        if prev_n_sites > 20:
+                            prev_n_sites = 20
+                            st.session_state.n_sites = prev_n_sites
+                        ui["n_sites"] = st.number_input(
+                            "Aantal collectieve warmtevoorzieningen",
+                            min_value=1,
+                            max_value=20,
+                            value=prev_n_sites,
+                            step=1,
+                            key="n_sites",
+                        )
+                    else:
+                        ui["min_sep"] = int(st.session_state.get("min_sep", 3))
+                        ui["n_sites"] = int(st.session_state.get("n_sites", 1))
 
                     ui["cap_mwh"] = text_input_int("Capaciteit per voorziening (MWh)", key="cap_mwh", default=100_000)
                     ui["cap_buildings"] = text_input_int("Max gebouwen per voorziening", key="cap_buildings", default=1_000)
@@ -415,6 +550,9 @@ def build_sidebar(df_in: pd.DataFrame) -> Tuple[pd.DataFrame, Dict[str, Any], bo
                     ui["opex_pct"] = st.number_input("Extra operationele kosten (% van vaste kosten)", min_value=0, max_value=100, value=10, step=1, key="opex_pct")
 
             ui["compute_sites"] = compute_sites
+            ui["reset_manual_site"] = reset_manual
+            if "sites_mode" not in ui:
+                ui["sites_mode"] = st.session_state.get("sites_mode", "auto")
 
         # ---------------- Uitleg-blokken ----------------
         st.header("Uitleg")
@@ -447,4 +585,4 @@ De analyse laat zien waar een **collectieve warmtevoorziening** (zoals een buurt
 - **k = 5** – grotere buurt, ±91 hexagonen. Omvat een deelwijk of bedrijventerrein van enkele hectares.  
 """)
 
-    return df, ui, button_clicked
+    return df, ui

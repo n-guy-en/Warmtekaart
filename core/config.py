@@ -18,8 +18,13 @@ except Exception:  # Streamlit niet beschikbaar (CLI/tests)
 # -----------------------------
 # Projectconstanten
 # -----------------------------
-BASE_H3_RES: int = 12
-AVG_HA_BY_RES: dict[int, float] = {9: 17.6, 10: 8.8, 11: 4.4, 12: 2.2}
+BASE_H3_RES: int = 13
+H3_AREA_RES0_KM2: float = 4_357_449.0
+AVG_HA_BY_RES: dict[int, float] = {
+    res: (H3_AREA_RES0_KM2 / (7 ** res)) * 100.0 #km2 -> ha
+    for res in range(0, 16)
+}
+
 
 # -----------------------------
 # Project-relative base paths
@@ -70,7 +75,7 @@ DATA_CSV_PATH = _env_path("WARMTE_DATA_CSV", DATA_DIR / "data.parquet")
 DATA_CSV_URL = _env_url("WARMTE_URL_DATA_CSV")
 
 PRECOMPUTED_DIR = DATA_DIR / "precomputed"
-H3_RES12_GROUPED_PATH = PRECOMPUTED_DIR / "h3_res12_grouped.parquet"
+H3_RES13_GROUPED_PATH = PRECOMPUTED_DIR / "h3_res13_grouped.parquet"
 
 ENERGIEARMOEDE_PATH = _env_path(
     "WARMTE_LYR_ENERGIEARMOEDE", LAYERS_DIR / "energiearmoede_frl.geojson.gz"
@@ -147,29 +152,10 @@ GJ_COMMON_PROPS = ["buurtnaam", "gemeentenaam"]
 # Basemap-config
 # ================================
 BASEMAP_CFG = {
-    "light": {
-        "title": "Light",
-        "tile": "https://basemaps.cartocdn.com/light_all/{z}/{x}/{y}.png",
-        "legend_html": "Heldere achtergrond met subtiele labels. Bron: CARTO + OSM.",
-    },
-    "dark": {
-        "title": "Dark",
-        "tile": "https://basemaps.cartocdn.com/dark_all/{z}/{x}/{y}.png",
-        "legend_html": "Donkere achtergrond voor nadruk op thema-lagen. Bron: CARTO + OSM.",
-    },
-    "streets": {
-        "title": "Streets",
-        "tile": "https://tile.openstreetmap.org/{z}/{x}/{y}.png",
-        "legend_html": "Standaard OSM-tegels met straten en labels. Bron: OSM.",
-    },
-    "outdoors": {
-        "title": "Outdoors",
-        "tile": "https://basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}.png",
-        "legend_html": "Outdoor-achtig thema. Bron: CARTO + OSM.",
-    },
-    "satellite": {
-        "title": "Satellite",
-        "tile": "https://tiles.maps.eox.at/wmts/1.0.0/s2cloudless-2020_3857/xyz/{z}/{x}/{y}.jpg",
-        "legend_html": "Satellietbeeld zonder labels (2020 cloudless). Bron: EOX + Copernicus.",
+    "brt": {
+        "title": "BRT Achtergrondkaart",
+        "map_style": "https://api.pdok.nl/kadaster/brt-achtergrondkaart/ogc/v1/styles/standaard__webmercatorquad?f=mapbox",
+        "attribution": "© BRT Achtergrondkaart, Kadaster (CC-BY 4.0)",
+        "legend_html": "Bron: Kadaster via PDOK",
     },
 }

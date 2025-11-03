@@ -4,9 +4,12 @@ from __future__ import annotations
 import hashlib
 from functools import lru_cache
 from typing import List, Dict, Any
+import math
 
 import pandas as pd
 import streamlit as st
+
+from core.config import BASE_H3_RES, AVG_HA_BY_RES
 
 # ============================================================
 # Kleuren & legenda
@@ -71,16 +74,29 @@ def legend_labels_from_breaks(breaks):
     return [f"< {pct[0]}%", f"{pct[0]}–{pct[1]}%", f"{pct[1]}–{pct[2]}%", f"≥ {pct[2]}%"]
 
 
-def render_mini_legend(title, colors, labels):
+def render_mini_legend(title, colors, labels, *, dark_mode: bool = False):
     rows = "".join(
         f'<div class="ea-row"><span class="ea-swatch" style="background:rgba({c[0]},{c[1]},{c[2]},{c[3]/255});"></span> {lab}</div>'
         for c, lab in zip(colors, labels)
     )
+    bg_color = "#111827" if dark_mode else "#ffffff"
+    border_color = "#374151" if dark_mode else "#e5e7eb"
+    text_color = "#f9fafb" if dark_mode else "#111827"
+    swatch_border = "#4b5563" if dark_mode else "#d1d5db"
     html = f"""
     <style>
-      .ea-legend {{ background:#fff; border:1px solid #e5e7eb; border-radius:10px; padding:10px; font-family:Arial; font-size:12px; margin-bottom:20px;}}
+      .ea-legend {{
+        background:{bg_color};
+        border:1px solid {border_color};
+        border-radius:10px;
+        padding:10px;
+        font-family:Arial, sans-serif;
+        font-size:12px;
+        color:{text_color};
+        margin-bottom:20px;
+      }}
       .ea-row {{ display:flex; align-items:center; margin:4px 0; }}
-      .ea-swatch {{ width:16px; height:12px; border-radius:3px; margin-right:8px; border:1px solid #d1d5db; }}
+      .ea-swatch {{ width:16px; height:12px; border-radius:3px; margin-right:8px; border:1px solid {swatch_border}; }}
     </style>
     <div class="ea-legend">
       <div style="font-weight:600; margin-bottom:6px;">{title}</div>
@@ -88,7 +104,6 @@ def render_mini_legend(title, colors, labels):
     </div>
     """
     st.markdown(html, unsafe_allow_html=True)
-
 
 # ============================================================
 # Nummerformatting & parsing
@@ -121,7 +136,11 @@ def get_dynamic_resolution(zoom_level):
     """
     Pakt het zoom niveau van de slider om dynamisch de h3_index steeds opnieuw te berekenen en te weergeven op de kaart.
     """
-    return zoom_level
+    try:
+        lvl = int(zoom_level)
+    except Exception:
+        lvl = BASE_H3_RES
+    return min(lvl, BASE_H3_RES)
 
 
 def get_dynamic_line_width(zoom_level):
@@ -132,19 +151,42 @@ def get_dynamic_line_width(zoom_level):
     return 0
 
 
+def get_hexagon_metrics(zoom_level: int) -> dict[str, float]:
+    """
+    Geef eigenschappen van de H3-hexagon bij het gekozen zoomniveau:
+    - resolution (int): gebruikte H3-resolutie (max BASE_H3_RES)
+    - flat_width_km (float): afstand tussen twee tegenoverliggende zijden (km)
+    - area_ha (float): hexagon-oppervlakte in hectares
+    """
+    try:
+        zoom = int(zoom_level)
+    except Exception:
+        zoom = BASE_H3_RES
+    res = min(max(0, zoom), BASE_H3_RES)
+ 
+    area_ha = float(AVG_HA_BY_RES.get(res, AVG_HA_BY_RES[BASE_H3_RES]))
+    area_km2 = area_ha / 100.0
+ 
+    # Regelmatige hexagon met zijde s:
+    # A = (3 * sqrt(3) / 2) * s^2
+    side_km = math.sqrt((2.0 * area_km2) / (3.0 * math.sqrt(3.0)))
+    flat_to_flat_km = math.sqrt(3.0) * side_km
+    vertex_to_vertex_km = 2.0 * side_km
+ 
+    return {
+        "resolution": float(res),
+        "flat_width_km": float(flat_to_flat_km),
+        "vertex_width_km": float(vertex_to_vertex_km),
+        "area_ha": float(area_ha),
+        "area_m2": float(area_km2 * 1_000_000.0),
+    }
+
+
 def get_hexagon_size(zoom_level: int) -> float:
     """
-    Geeft een schatting van de zichtbare schaal (in kilometer)
-    bij het opgegeven zoomniveau van de kaart.
-
-    Deze waarden zijn bedoeld om aan te geven hoe groot het kaartgebied
-    ongeveer is op elk zoomniveau. Het is niet de werkelijke H3-hexagon-grootte.
+    Helper: geeft platte breedte (km) terug.
     """
-    hexagon_sizes = {
-        1: 5000, 2: 2500, 3: 1500, 4: 700, 5: 350, 6: 175, 7: 90,
-        8: 35, 9: 17, 10: 8, 11: 4, 12: 2, 13: 1, 14: 0.5, 15: 0.2
-    }
-    return hexagon_sizes.get(zoom_level, 10)
+    return get_hexagon_metrics(zoom_level).get("flat_width_km", 10.0)
 
 
 # ============================================================
@@ -188,7 +230,7 @@ def _view_for_selection(df_full, woonplaatsen_geselecteerd):
     """
     FRIESLAND_CENTER = (53.125, 5.75)
     FRIESLAND_ZOOM   = 8
-    MIN_ZOOM, MAX_ZOOM = 8, 12.0
+    MIN_ZOOM, MAX_ZOOM = 8, 13.0
 
     if not woonplaatsen_geselecteerd:
         return FRIESLAND_CENTER[0], FRIESLAND_CENTER[1], FRIESLAND_ZOOM
@@ -201,7 +243,7 @@ def _view_for_selection(df_full, woonplaatsen_geselecteerd):
     lon_center = float(df_sel["longitude"].mean())
 
     if len(woonplaatsen_geselecteerd) == 1:
-        return lat_center, lon_center, 12.0
+        return lat_center, lon_center, 13.0
 
     lat_min, lat_max = float(df_sel["latitude"].min()), float(df_sel["latitude"].max())
     lon_min, lon_max = float(df_sel["longitude"].min()), float(df_sel["longitude"].max())
@@ -359,8 +401,9 @@ def build_deck_tooltip() -> dict:
         <div class="tooltip-row">Aantal VBO's: {aantal_VBOs_fmt}</div>
         <div class="tooltip-row">Warmtevraag-dichtheid: {MWh_per_ha_r_fmt} MWh/ha</div>
         <div class="tooltip-row">Totale Heat Demand: {gemiddeld_jaarverbruik_mWh_r_fmt} MWh</div>
-        <div class="tooltip-row">Oppervlakte cel: {area_ha_r_fmt} ha</div>
+        <div class="tooltip-row">Oppervlakte cel: {area_ha_r_fmt} ha ({area_m2_fmt} m²)</div>
         <div class="tooltip-row">Gemiddelde Energiegebruik: {kWh_per_m2_fmt} kWh/m²</div>
+        <div class="tooltip-row">Warmtevraag per pand: {MWh_per_pand_fmt} MWh/pand</div>
         <div class="tooltip-row">Totale Oppervlakte: {totale_oppervlakte_fmt} m²</div>
         <div class="tooltip-row">Gemiddelde Bouwjaar: {bouwjaar_fmt}</div>
       </div>

@@ -16,7 +16,7 @@ from .config import (
     LAYER_CFG,
     DATA_CSV_PATH,
     DATA_CSV_URL,
-    H3_RES12_GROUPED_PATH,
+    H3_RES13_GROUPED_PATH,
     ENERGIEARMOEDE_PATH,
     KOOPWONINGEN_PATH,
     WOONCORPORATIE_PATH,
@@ -277,9 +277,9 @@ def load_precomputed_h3_grouped(ttl=3600) -> pd.DataFrame | None:
     """
     Laadt het pre-geaggregeerde H3-bestand indien aanwezig.
     """
-    if not H3_RES12_GROUPED_PATH.exists():
+    if not H3_RES13_GROUPED_PATH.exists():
         return None
-    df = pd.read_parquet(H3_RES12_GROUPED_PATH)
+    df = pd.read_parquet(H3_RES13_GROUPED_PATH)
 
     for col in ["woonplaats", "Energieklasse", "Dataset"]:
         if col in df.columns:

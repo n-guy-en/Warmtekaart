@@ -78,22 +78,28 @@ def build_base_layers(style_key: str, hide_basemap: bool):
     layers_local = []
 
     if conf.get("tile"):
-        layers_local.append(pdk.Layer(
-            "TileLayer",
-            data=conf["tile"],
-            minZoom=0,
-            maxZoom=19,
-            tileSize=256
-        ))
+        tile_kwargs = {
+            "data": conf["tile"],
+            "min_zoom": 0,
+            "max_zoom": 19,
+            "tile_size": 256,
+        }
+        attribution = conf.get("attribution")
+        if attribution:
+            tile_kwargs["attribution"] = f"'{attribution}'"
+        layers_local.append(pdk.Layer("TileLayer", **tile_kwargs))
 
     if conf.get("labels"):
-        layers_local.append(pdk.Layer(
-            "TileLayer",
-            data=conf["labels"],
-            minZoom=0,
-            maxZoom=19,
-            tileSize=256
-        ))
+        label_kwargs = {
+            "data": conf["labels"],
+            "min_zoom": 0,
+            "max_zoom": 19,
+            "tile_size": 256,
+        }
+        label_attrib = conf.get("labels_attribution")
+        if label_attrib:
+            label_kwargs["attribution"] = f"'{label_attrib}'"
+        layers_local.append(pdk.Layer("TileLayer", **label_kwargs))
 
     return layers_local
 
@@ -144,8 +150,10 @@ def create_layers_by_zoom(data_hex_df, show_main: bool, extruded: bool, zoom_lev
         layers.append(create_main_layer(data_hex_df, show_main, extruded, zoom_level, 0.05))
     elif 8 <= zoom_level <= 11:
         layers.append(create_main_layer(data_hex_df, show_main, extruded, zoom_level, 0.08))
-    else:  # zoom_level >= 12
-        layers.append(create_main_layer(data_hex_df, show_main, extruded, zoom_level, 0.10))
+    elif zoom_level == 12:
+        layers.append(create_main_layer(data_hex_df, show_main, extruded, zoom_level, 0,10))
+    else:  # zoom_level >= 13
+        layers.append(create_main_layer(data_hex_df, show_main, extruded, zoom_level, 0.12))
     return layers
 
 # ------------------------------------------------------------
@@ -205,7 +213,12 @@ def create_site_layers(
                 "aantal_VBOs": coverage_summary.get("aantal_VBOs"),
                 "gemiddeld_jaarverbruik_mWh_r": coverage_summary.get("gemiddeld_jaarverbruik_mWh_r"),
                 "area_ha_r": coverage_summary.get("area_ha_r"),
+                "area_m2": coverage_summary.get("area_m2"),
                 "totale_oppervlakte": coverage_summary.get("totale_oppervlakte"),
+                "area_ha_total": coverage_summary.get("area_ha_total"),
+                "area_ha_total_fmt": coverage_summary.get("area_ha_total_fmt"),
+                "area_m2_total": coverage_summary.get("area_m2_total"),
+                "area_m2_total_fmt": coverage_summary.get("area_m2_total_fmt"),
                 "kWh_per_m2": coverage_summary.get("kWh_per_m2"),
                 "MWh_per_ha_r": coverage_summary.get("MWh_per_ha_r"),
                 "bouwjaar": coverage_summary.get("bouwjaar"),
@@ -213,6 +226,7 @@ def create_site_layers(
                 "aantal_VBOs_fmt": coverage_summary.get("aantal_VBOs_fmt"),
                 "gemiddeld_jaarverbruik_mWh_r_fmt": coverage_summary.get("gemiddeld_jaarverbruik_mWh_r_fmt"),
                 "area_ha_r_fmt": coverage_summary.get("area_ha_r_fmt"),
+                "area_m2_fmt": coverage_summary.get("area_m2_fmt"),
                 "totale_oppervlakte_fmt": coverage_summary.get("totale_oppervlakte_fmt"),
                 "kWh_per_m2_fmt": coverage_summary.get("kWh_per_m2_fmt"),
                 "MWh_per_ha_r_fmt": coverage_summary.get("MWh_per_ha_r_fmt"),
@@ -295,6 +309,14 @@ def create_site_layers(
             "cap_MWh": cap_MWh,
             "connected_MWh": connected_MWh,
             "utilization_pct": utilization_pct,
+            "area_ha": coverage_summary.get("area_ha_r"),
+            "area_ha_fmt": coverage_summary.get("area_ha_r_fmt"),
+            "area_m2": coverage_summary.get("area_m2"),
+            "area_m2_fmt": coverage_summary.get("area_m2_fmt"),
+            "area_ha_total": coverage_summary.get("area_ha_total"),
+            "area_ha_total_fmt": coverage_summary.get("area_ha_total_fmt"),
+            "area_m2_total": coverage_summary.get("area_m2_total"),
+            "area_m2_total_fmt": coverage_summary.get("area_m2_total_fmt"),
 
             # formatted for tooltip (maak ze indien niet aanwezig)
             "cluster_buildings_fmt": r.get("cluster_buildings_fmt") or _fmt0(cluster_buildings),

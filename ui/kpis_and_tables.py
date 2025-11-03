@@ -191,6 +191,11 @@ def render_tabs(df_filtered: pd.DataFrame, threshold: float, show_sites_layer: b
                     if col in out_fmt.columns:
                         s = pd.to_numeric(out_fmt[col], errors="coerce").fillna(0).round(0).astype("int64")
                         out_fmt[col] = s.map(lambda v: f"{v:,}".replace(",", "."))
+                if "Warmtevraag\n per pand (MWh)" in out_fmt.columns:
+                    s = pd.to_numeric(out_fmt["Warmtevraag\n per pand (MWh)"], errors="coerce")
+                    out_fmt["Warmtevraag\n per pand (MWh)"] = s.map(
+                        lambda v: "" if pd.isna(v) else f"{float(v):,.2f}".replace(",", "#").replace(".", ",").replace("#", ".")
+                    )
 
                 st.dataframe(out_fmt, width="stretch", height=440, hide_index=True)
 
