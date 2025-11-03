@@ -253,7 +253,6 @@ def build_sidebar(df_in: pd.DataFrame) -> Tuple[pd.DataFrame, Dict[str, Any]]:
                     "- **10,0 – 50,0 kWh/m²** – gemiddelde warmtevraag (geel)\n"
                     "- **50,0 – grenswaarde** – hoge warmtevraag (rood)\n"
                     "- **> grenswaarde** – Aandachtsgebied (donkerpaars)\n\n"
-                    "Alles boven de grenswaarde wordt als groen weergegeven op de kaart."
                 )
 
             # Woonlagen + mini-legenda's

@@ -4,6 +4,7 @@ from __future__ import annotations
 # ========== Imports ==========
 import gc
 import math
+from typing import Any
 
 import h3
 import pandas as pd
@@ -1048,10 +1049,10 @@ if st.session_state.show_map:
         manual_hex_current = st.session_state.get("manual_site_h3")
         if current_sites_mode == "manual" and manual_hex_current:
             lat_manual, lon_manual = h3.cell_to_latlng(manual_hex_current)
-            return lat_manual, lon_manual, 12.0
+            return lat_manual, lon_manual, 13.0
         friesland_center = (53.125, 5.75)
         friesland_zoom = 8
-        min_zoom, max_zoom = 8, 12.0
+        min_zoom, max_zoom = 8, 13.0
         if not woonplaatsen_geselecteerd:
             return friesland_center[0], friesland_center[1], friesland_zoom
         df_sel = df_full[df_full["woonplaats"].isin(woonplaatsen_geselecteerd)]
@@ -1060,7 +1061,7 @@ if st.session_state.show_map:
         lat_center = float(df_sel["latitude"].mean())
         lon_center = float(df_sel["longitude"].mean())
         if len(woonplaatsen_geselecteerd) == 1:
-            return lat_center, lon_center, 12.0
+            return lat_center, lon_center, 13.0
         lat_min = float(df_sel["latitude"].min())
         lat_max = float(df_sel["latitude"].max())
         lon_min = float(df_sel["longitude"].min())
