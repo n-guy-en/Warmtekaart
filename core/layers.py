@@ -151,7 +151,7 @@ def create_layers_by_zoom(data_hex_df, show_main: bool, extruded: bool, zoom_lev
     elif 8 <= zoom_level <= 11:
         layers.append(create_main_layer(data_hex_df, show_main, extruded, zoom_level, 0.08))
     elif zoom_level == 12:
-        layers.append(create_main_layer(data_hex_df, show_main, extruded, zoom_level, 0,10))
+        layers.append(create_main_layer(data_hex_df, show_main, extruded, zoom_level, 0.10))
     else:  # zoom_level >= 13
         layers.append(create_main_layer(data_hex_df, show_main, extruded, zoom_level, 0.12))
     return layers
