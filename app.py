@@ -239,6 +239,7 @@ def _build_filters_snapshot(ui: dict) -> dict:
         "hide_basemap":        bool(ui.get("hide_basemap", False)),
         "show_main_layer":     bool(ui.get("show_main_layer", True)),
         "show_indicative_layer": bool(ui.get("show_indicative_layer", True)),
+        "warmte_hex_opacity":  _as_float(ui.get("warmte_hex_opacity", st.session_state.get("warmte_hex_opacity", 0.6))),
         "threshold":           _as_float(ui.get("threshold", 50.0)),
         "gemeente":            _as_sorted_list(ui.get("gemeente_selectie")),
         "woonplaats":          _as_sorted_list(ui.get("woonplaats_selectie")),
@@ -255,6 +256,7 @@ def _build_filters_snapshot(ui: dict) -> dict:
         "water_opacity":       _as_float(ui.get("water_opacity", 0.6)),
         "participatie":        _as_int(ui.get("participatie", st.session_state.get("participatie", 80))),
         "show_sites_layer":    bool(ui.get("show_sites_layer", False)),
+        "sites_hex_opacity":   _as_float(ui.get("sites_hex_opacity", st.session_state.get("sites_hex_opacity", 0.85))),
         "kring_radius":        _as_int(ui.get("kring_radius", st.session_state.get("kring_radius", 3))),
         "min_sep":             _as_int(ui.get("min_sep", st.session_state.get("min_sep", 3))),
         "n_sites":             _as_int(ui.get("n_sites", st.session_state.get("n_sites", 3))),
@@ -289,9 +291,12 @@ if filters_changed:
     changed_keys = _changed_filter_keys(st.session_state.prev_filters, current_filters)
     st.session_state.prev_filters = current_filters
     woonplaats_only_change = bool(changed_keys) and changed_keys.issubset({"woonplaats"})
+    visual_only_change = bool(changed_keys) and changed_keys.issubset({"warmte_hex_opacity", "sites_hex_opacity"})
     if woonplaats_only_change and st.session_state.get("show_map"):
         st.session_state["_map_changed"] = False
         st.session_state["sites_ready"] = False
+    elif visual_only_change:
+        st.session_state["_map_changed"] = False
     else:
         st.session_state.show_map = False
         st.session_state["_map_changed"] = True
@@ -547,7 +552,7 @@ def _build_site_records(
         record["indicatieve_kosten_site"] = int(
             round(record["vaste_kosten"] + record["opex"] + record["variabele_kosten"])
         )
-        record["hex_section_display"] = "none"
+        record["hex_section_display"] = "block"
         record["site_section_display"] = "block"
         record["geo_section_display"] = "none"
         record["site_rank"] = idx
@@ -647,6 +652,7 @@ def _build_site_records(
                     "site_rank": idx,
                     "sub_rank": cov_idx,
                     "h3_index": getattr(cov, "h3_index", ""),
+                    "woonplaats": getattr(cov, "woonplaats", "") or record.get("woonplaats", ""),
                     "aantal_huizen": _safe_int(getattr(cov, "aantal_huizen", 0), 0) or 0,
                     "aantal_VBOs": _safe_int(getattr(cov, "aantal_VBOs", 0), 0) or 0,
                     "MWh_per_ha_r": _safe_float(getattr(cov, "MWh_per_ha_r", 0.0), 0.0) or 0.0,
@@ -1028,16 +1034,27 @@ if st.session_state.show_map:
     indic_mask = df_filtered["kWh_per_m2"] > threshold
     df_indicative = df_hex_view.loc[indic_mask, :]
     _log_ram("before_pydeck_layers")
-    layers = create_layers_by_zoom(df_hex_view, ui["show_main_layer"], ui["extruded"], ui["zoom_level"])
+    warmte_opacity = float(ui.get("warmte_hex_opacity", st.session_state.get("warmte_hex_opacity", 0.6)))
+    layers = create_layers_by_zoom(
+        df_hex_view,
+        ui["show_main_layer"],
+        ui["extruded"],
+        ui["zoom_level"],
+        warmte_opacity,
+    )
 
     site_layers = []
     if allow_sites and sites_records:
         sites_costed_records = st.session_state.sites_costed if st.session_state.get("sites_ready") else None
-        site_layers = create_site_layers(sites_records, sites_costed_records)
+        site_layers = create_site_layers(
+            sites_records,
+            sites_costed_records,
+            site_hex_opacity=float(ui.get("sites_hex_opacity", st.session_state.get("sites_hex_opacity", 0.85))),
+        )
 
     # Indicatieve aandachtslaag
     if ui["show_indicative_layer"] and not df_indicative.empty:
-        layers.append(create_indicative_area_layer(df_indicative, ui["extruded"], ui["zoom_level"]))
+        layers.append(create_indicative_area_layer(df_indicative, ui["extruded"], ui["zoom_level"], warmte_opacity))
 
     # Basemap
     hide_bg = bool(ui.get("hide_basemap"))

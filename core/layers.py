@@ -106,7 +106,14 @@ def build_base_layers(style_key: str, hide_basemap: bool):
 # ------------------------------------------------------------
 # H3 hoofdlaag + indicatieve laag
 # ------------------------------------------------------------
-def create_main_layer(data_hex_df, show: bool, extruded: bool, zoom_level: int, elevation_scale: float):
+def create_main_layer(
+    data_hex_df,
+    show: bool,
+    extruded: bool,
+    zoom_level: int,
+    elevation_scale: float,
+    layer_opacity: float = 1.0,
+):
     """Bouw de primaire H3-laag met kleur en hoogte op basis van energievraag."""
     # verwacht een DataFrame (geen list[dict])
     return pdk.Layer(
@@ -121,9 +128,10 @@ def create_main_layer(data_hex_df, show: bool, extruded: bool, zoom_level: int, 
         elevation_range=[0, 800.0],
         get_line_width=get_dynamic_line_width(zoom_level),
         visible=show,
+        opacity=float(layer_opacity),
     )
 
-def create_indicative_area_layer(data, extruded: bool, zoom_level: int):
+def create_indicative_area_layer(data, extruded: bool, zoom_level: int, layer_opacity: float = 1.0):
     """
     H3 laag voor indicatieve aandachtsgebieden. Verwacht een reeds gefilterde bron
     (DataFrame of list[dict]) met minimaal de kolom h3_index.
@@ -137,23 +145,30 @@ def create_indicative_area_layer(data, extruded: bool, zoom_level: int):
         get_fill_color=[58, 27, 47, 200],
         get_line_color=[0, 0, 0, 0],
         get_line_width=get_dynamic_line_width(zoom_level),
-        visible=True
+        visible=True,
+        opacity=float(layer_opacity),
     )
 
-def create_layers_by_zoom(data_hex_df, show_main: bool, extruded: bool, zoom_level: int):
+def create_layers_by_zoom(
+    data_hex_df,
+    show_main: bool,
+    extruded: bool,
+    zoom_level: int,
+    layer_opacity: float = 1.0,
+):
     """Stel de hoofdlaag samen met een passende elevatieschaal per zoomniveau."""
     # Verwacht hier een DataFrame (geen list[dict])
     layers = []
     if zoom_level <= 3:
-        layers.append(create_main_layer(data_hex_df, show_main, extruded, zoom_level, 0.01))
+        layers.append(create_main_layer(data_hex_df, show_main, extruded, zoom_level, 0.01, layer_opacity))
     elif 4 <= zoom_level <= 7:
-        layers.append(create_main_layer(data_hex_df, show_main, extruded, zoom_level, 0.05))
+        layers.append(create_main_layer(data_hex_df, show_main, extruded, zoom_level, 0.05, layer_opacity))
     elif 8 <= zoom_level <= 11:
-        layers.append(create_main_layer(data_hex_df, show_main, extruded, zoom_level, 0.08))
+        layers.append(create_main_layer(data_hex_df, show_main, extruded, zoom_level, 0.08, layer_opacity))
     elif zoom_level == 12:
-        layers.append(create_main_layer(data_hex_df, show_main, extruded, zoom_level, 0.10))
+        layers.append(create_main_layer(data_hex_df, show_main, extruded, zoom_level, 0.10, layer_opacity))
     else:  # zoom_level >= 13
-        layers.append(create_main_layer(data_hex_df, show_main, extruded, zoom_level, 0.12))
+        layers.append(create_main_layer(data_hex_df, show_main, extruded, zoom_level, 0.12, layer_opacity))
     return layers
 
 # ------------------------------------------------------------
@@ -161,7 +176,8 @@ def create_layers_by_zoom(data_hex_df, show_main: bool, extruded: bool, zoom_lev
 # ------------------------------------------------------------
 def create_site_layers(
     sites_data: Union[Records, "pd.DataFrame"],
-    sites_costed: Union[Records, "pd.DataFrame", None] = None
+    sites_costed: Union[Records, "pd.DataFrame", None] = None,
+    site_hex_opacity: float = 1.0,
 ):
     """
     Maakt:
@@ -270,7 +286,7 @@ def create_site_layers(
             extruded=False,
             get_hexagon="h3_index",
             get_fill_color="fill_color",
-            opacity=1.0,
+            opacity=float(site_hex_opacity),
         ))
 
     # Scatter markers: gebruik 'costed' records indien aanwezig

@@ -239,6 +239,15 @@ def build_sidebar(df_in: pd.DataFrame) -> Tuple[pd.DataFrame, Dict[str, Any]]:
             _render_big_legend(current_threshold, dark_mode=dark_mode)
 
             ui["show_indicative_layer"] = st.toggle("Aandachtsgebieden tonen", value=True, key="show_indicative_layer")
+            ui["warmte_hex_opacity"] = st.slider(
+                "Transparantie warmtevraag-hexagonen",
+                min_value=0.0,
+                max_value=1.0,
+                value=st.session_state.get("warmte_hex_opacity", 0.6),
+                step=0.05,
+                key="warmte_hex_opacity",
+                help="0 = transparant (onderliggende lagen zichtbaar) | 1 = dekkend" 
+            )
             ui["threshold"] = st.number_input(
                 "Stel de minimale grenswaarde (threshold) in per kWh/m²:",
                 min_value=0,
@@ -454,6 +463,7 @@ def build_sidebar(df_in: pd.DataFrame) -> Tuple[pd.DataFrame, Dict[str, Any]]:
         info_html = "<p style='font-size:12px; color:#6b7280; margin-bottom:8px;'>Analyse beschikbaar vanaf zoomniveau 11.</p>"
 
         with st.expander("Collectieve warmtevoorziening (analyse)", expanded=False):
+            default_site_opacity = st.session_state.get("sites_hex_opacity", 0.85)
             compute_sites = False
             reset_manual = False
             if not can_analyse:
@@ -494,6 +504,16 @@ def build_sidebar(df_in: pd.DataFrame) -> Tuple[pd.DataFrame, Dict[str, Any]]:
                         reset_manual = st.button("Wis handmatige selectie", key="reset_manual_site")
                         current_manual = st.session_state.get("manual_site_h3")
                         st.caption(f"Geselecteerde H3-index: `{current_manual or 'geen'}`")
+
+                    ui["sites_hex_opacity"] = st.slider(
+                        "Transparantie voorziening-hexagonen",
+                        min_value=0.0,
+                        max_value=1.0,
+                        value=float(st.session_state.get("sites_hex_opacity", default_site_opacity)),
+                        step=0.05,
+                        key="sites_hex_opacity",
+                        help="0 = transparant (onderliggende lagen zichtbaar) | 1 = dekkend"
+                    )
 
                     max_k_ring = 10 if ui["sites_mode"] == "manual" else 5
                     prev_kring = int(st.session_state.get("kring_radius", 3))
