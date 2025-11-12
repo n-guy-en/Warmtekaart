@@ -133,7 +133,7 @@ def render_tabs(df_filtered: pd.DataFrame, threshold: float, show_sites_layer: b
             if sites_costed_df is not None and not sites_costed_df.empty:
                 cols_keep = [
                     "site_rank", "gebied_label", "cluster_buildings", "cap_buildings", "connected_buildings",
-                    "cluster_MWh", "cap_MWh", "connected_MWh", "utilization_pct", "indicatieve_kosten_site"
+                    "cluster_MWh", "cap_MWh", "connected_MWh", "MWh_per_ha", "utilization_pct", "indicatieve_kosten_site"
                 ]
                 have = [c for c in cols_keep if c in sites_costed_df.columns]
                 out = sites_costed_df.loc[:, have].copy()
@@ -148,6 +148,7 @@ def render_tabs(df_filtered: pd.DataFrame, threshold: float, show_sites_layer: b
                     "cluster_MWh": "MWh\nin radar",
                     "cap_MWh": "Capaciteit\nMWh",
                     "connected_MWh": "Aangesloten\nMWh",
+                    "MWh_per_ha": "Warmtevraag\n per ha (MWh)",
                     "utilization_pct": "Benutting\n(%)",
                     "indicatieve_kosten_site": "Indicatieve\njaarlast (€)"
                 }
@@ -194,6 +195,11 @@ def render_tabs(df_filtered: pd.DataFrame, threshold: float, show_sites_layer: b
                 if "Warmtevraag\n per pand (MWh)" in out_fmt.columns:
                     s = pd.to_numeric(out_fmt["Warmtevraag\n per pand (MWh)"], errors="coerce")
                     out_fmt["Warmtevraag\n per pand (MWh)"] = s.map(
+                        lambda v: "" if pd.isna(v) else f"{float(v):,.2f}".replace(",", "#").replace(".", ",").replace("#", ".")
+                    )
+                if "Warmtevraag\n per ha (MWh)" in out_fmt.columns:
+                    s = pd.to_numeric(out_fmt["Warmtevraag\n per ha (MWh)"], errors="coerce")
+                    out_fmt["Warmtevraag\n per ha (MWh)"] = s.map(
                         lambda v: "" if pd.isna(v) else f"{float(v):,.2f}".replace(",", "#").replace(".", ",").replace("#", ".")
                     )
 

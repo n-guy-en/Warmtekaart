@@ -696,6 +696,10 @@ def _build_site_records(
                 coverage_buildings["gebouw_id"] = coverage_buildings.index.astype(int) + 1
                 coverage_buildings = coverage_buildings.to_dict("records")
 
+        density_value = coverage_summary.get("MWh_per_ha", 0.0) if coverage_summary else 0.0
+        record["MWh_per_ha"] = float(density_value or 0.0)
+        record["MWh_per_ha_fmt"] = _fmt2s(record["MWh_per_ha"])
+
         record["coverage_polygons"] = coverage_polygons
         record["coverage_summary"] = coverage_summary
         record["coverage_buildings"] = coverage_buildings
