@@ -10,6 +10,7 @@ import h3
 import pandas as pd
 import pydeck as pdk
 import streamlit as st
+from pyproj import Transformer
 
 # ---- interne modules ----
 from core.config import (
@@ -22,6 +23,8 @@ from core.config import (
     WOONCORPORATIE_PATH,
     SPOORDEEL_PATH,
     WATERDEEL_PATH,
+    WATER_POTENTIE_PATH,
+    BUURT_POTENTIE_PATH,
 )
 from core.utils import (
     format_dutch_number,
@@ -29,6 +32,10 @@ from core.utils import (
     get_dynamic_resolution,
     get_color,
     build_deck_tooltip,
+    get_color_palette,
+    extract_numeric_values,
+    compute_quantile_breaks,
+    format_numeric_range_labels,
 )
 from core.layers import (
     build_base_layers,
@@ -100,6 +107,138 @@ def _extract_selected_hex_from_payload(state_obj) -> str | None:
 
     return None
 
+
+_RD_TO_WGS84 = Transformer.from_crs("EPSG:28992", "EPSG:4326", always_xy=True)
+
+
+def _first_coordinate(coords):
+    if isinstance(coords, (list, tuple)):
+        if coords and isinstance(coords[0], (int, float)):
+            if len(coords) >= 2:
+                return coords[0], coords[1]
+            return None
+        for sub in coords:
+            sample = _first_coordinate(sub)
+            if sample:
+                return sample
+    return None
+
+
+def _needs_rd_to_wgs_conversion(gjson: dict) -> bool:
+    if not gjson or gjson.get("type") != "FeatureCollection":
+        return False
+    for feat in gjson.get("features", []):
+        geom = feat.get("geometry") or {}
+        coords = geom.get("coordinates")
+        sample = _first_coordinate(coords)
+        if sample:
+            x, y = sample
+            if abs(x) <= 180 and abs(y) <= 90:
+                return False
+            if abs(x) > 200 or abs(y) > 200:
+                return True
+    return False
+
+
+def _transform_coords_rd_to_wgs(coords):
+    if isinstance(coords, (list, tuple)):
+        if coords and isinstance(coords[0], (int, float)):
+            if len(coords) >= 2:
+                lon, lat = _RD_TO_WGS84.transform(coords[0], coords[1])
+                return [float(lon), float(lat)]
+            return coords
+        return [_transform_coords_rd_to_wgs(c) for c in coords]
+    return coords
+
+
+def _convert_geojson_to_wgs84_if_needed(gjson: dict) -> dict:
+    if not gjson or gjson.get("type") != "FeatureCollection":
+        return gjson
+    if not _needs_rd_to_wgs_conversion(gjson):
+        return gjson
+    feats_new = []
+    for feat in gjson.get("features", []):
+        geom = feat.get("geometry") or {}
+        coords = geom.get("coordinates")
+        new_geom = {
+            "type": geom.get("type"),
+            "coordinates": _transform_coords_rd_to_wgs(coords),
+        }
+        feats_new.append({
+            "type": "Feature",
+            "properties": feat.get("properties"),
+            "geometry": new_geom,
+        })
+    return {"type": "FeatureCollection", "features": feats_new}
+
+
+def _format_kwh_value(value: float | None) -> str:
+    if value is None:
+        return "-"
+    return f"{format_dutch_number(value, 0)} kWh"
+
+
+def _format_percent_value(value: float | None) -> str:
+    if value is None:
+        return "-"
+    return f"{format_dutch_number(value * 100, 1)}%"
+
+
+def _buurt_extra_rows(props: dict) -> str:
+    demand = props.get("Demand_ontvangen_kWh")
+    heat = props.get("heatDemand_kWh")
+    rows = []
+    if demand not in (None, ""):
+        try:
+            demand_val = float(demand)
+        except (TypeError, ValueError):
+            demand_val = None
+        rows.append(f"<div class='tooltip-row'>Ontvangen warmtevraag: {_format_kwh_value(demand_val)}</div>")
+    if heat not in (None, ""):
+        try:
+            heat_val = float(heat)
+        except (TypeError, ValueError):
+            heat_val = None
+        rows.append(f"<div class='tooltip-row'>Totale heat demand: {_format_kwh_value(heat_val)}</div>")
+    return "".join(rows)
+
+
+def _build_water_potential_meta(gjson: dict) -> dict:
+    cfg = LAYER_CFG["water_potentie"]
+    n_colors = cfg.get("n_colors", 5)
+    colors = get_color_palette(cfg.get("palette", "BuGn"), n_colors, cfg.get("alpha", 210))
+    values = extract_numeric_values(gjson, cfg["prop_name"])
+    breaks = compute_quantile_breaks(values, n_colors)
+    if breaks and len(breaks) > n_colors - 1:
+        breaks = breaks[: n_colors - 1]
+    legend_labels = format_numeric_range_labels(breaks, suffix=cfg.get("tooltip_unit", "kWh"), decimals=0)
+    return {
+        "breaks": breaks,
+        "colors": colors,
+        "labels": legend_labels,
+        "value_formatter": lambda v: _format_kwh_value(v),
+        "extra_rows_fn": None,
+        "default_opacity": 0.7,
+        "location_row_display": "none",
+    }
+
+
+def _build_buurt_potential_meta(gjson: dict) -> dict:
+    cfg = LAYER_CFG["buurt_potentie"]
+    n_colors = cfg.get("n_colors", 5)
+    colors = get_color_palette(cfg.get("palette", "YlOrRd"), n_colors, cfg.get("alpha", 210))
+    breaks = [i / n_colors for i in range(1, n_colors)]
+    legend_labels = format_numeric_range_labels([b * 100 for b in breaks], suffix="%", decimals=0)
+    return {
+        "breaks": breaks,
+        "colors": colors,
+        "labels": legend_labels,
+        "value_formatter": lambda v: _format_percent_value(v),
+        "extra_rows_fn": _buurt_extra_rows,
+        "default_opacity": 0.7,
+        "location_row_display": "block",
+    }
+
 # (optioneel) live RAM-meting in sidebar
 #try:
 #    import psutil, os
@@ -168,12 +307,30 @@ gjson_spoordeel = load_geojson(
     keep_props=[],
     coord_precision=3
 )
+gjson_water_potentie = load_geojson(
+    WATER_POTENTIE_PATH,
+    keep_props=["Potentie_kWh", "id"],
+    coord_precision=5,
+)
+gjson_water_potentie = _convert_geojson_to_wgs84_if_needed(gjson_water_potentie)
+gjson_buurt_potentie = load_geojson(
+    BUURT_POTENTIE_PATH,
+    keep_props=["Perc_covered", "Demand_ontvangen_kWh", "heatDemand_kWh", "buurtnaam", "gemeentenaam"],
+    coord_precision=5,
+)
+gjson_buurt_potentie = _convert_geojson_to_wgs84_if_needed(gjson_buurt_potentie)
+
+potential_meta: dict[str, dict] = {}
+if gjson_water_potentie:
+    potential_meta["water_potentie"] = _build_water_potential_meta(gjson_water_potentie)
+if gjson_buurt_potentie:
+    potential_meta["buurt_potentie"] = _build_buurt_potential_meta(gjson_buurt_potentie)
 
 df_raw = load_data()
 _log_ram("after_load_data")
 
 # ========== Sidebar / UI ==========
-sidebar_out = build_sidebar(df_raw)
+sidebar_out = build_sidebar(df_raw, potential_meta)
 map_button_clicked_sidebar = False
 if isinstance(sidebar_out, tuple):
     if len(sidebar_out) == 3:
@@ -250,6 +407,10 @@ def _build_filters_snapshot(ui: dict) -> dict:
         L["koopwoningen"]["toggle_key"]:    bool(st.session_state.get(L["koopwoningen"]["toggle_key"], False)),
         L["wooncorporatie"]["toggle_key"]:  bool(st.session_state.get(L["wooncorporatie"]["toggle_key"], False)),
         "extra_opacity":       _as_float(ui.get("extra_opacity", 0.55)),
+        L["water_potentie"]["toggle_key"]:  bool(st.session_state.get(L["water_potentie"]["toggle_key"], False)),
+        "water_potentie_opacity": _as_float(ui.get("water_potentie_opacity", st.session_state.get("water_potentie_opacity", 0.7))),
+        L["buurt_potentie"]["toggle_key"]:  bool(st.session_state.get(L["buurt_potentie"]["toggle_key"], False)),
+        "buurt_potentie_opacity": _as_float(ui.get("buurt_potentie_opacity", st.session_state.get("buurt_potentie_opacity", 0.7))),
         L["spoordeel"]["toggle_key"]:       bool(st.session_state.get(L["spoordeel"]["toggle_key"], False)),
         L["waterdeel"]["toggle_key"]:       bool(st.session_state.get(L["waterdeel"]["toggle_key"], False)),
         "spoor_opacity":       _as_float(ui.get("spoor_opacity", 0.5)),
@@ -291,7 +452,12 @@ if filters_changed:
     changed_keys = _changed_filter_keys(st.session_state.prev_filters, current_filters)
     st.session_state.prev_filters = current_filters
     woonplaats_only_change = bool(changed_keys) and changed_keys.issubset({"woonplaats"})
-    visual_only_change = bool(changed_keys) and changed_keys.issubset({"warmte_hex_opacity", "sites_hex_opacity"})
+    visual_only_change = bool(changed_keys) and changed_keys.issubset({
+        "warmte_hex_opacity",
+        "sites_hex_opacity",
+        "water_potentie_opacity",
+        "buurt_potentie_opacity",
+    })
     if woonplaats_only_change and st.session_state.get("show_map"):
         st.session_state["_map_changed"] = False
         st.session_state["sites_ready"] = False
@@ -555,6 +721,9 @@ def _build_site_records(
         record["hex_section_display"] = "block"
         record["site_section_display"] = "block"
         record["geo_section_display"] = "none"
+        record["geo_extra_rows"] = ""
+        record["gemeente_row_display"] = "block"
+        record["buurt_row_display"] = "block"
         record["site_rank"] = idx
 
         cluster_buildings_val = max(record["cluster_buildings"], 0)
@@ -652,6 +821,9 @@ def _build_site_records(
                     "site_rank": idx,
                     "sub_rank": cov_idx,
                     "h3_index": getattr(cov, "h3_index", ""),
+                    "geo_extra_rows": "",
+                    "gemeente_row_display": "block",
+                    "buurt_row_display": "block",
                     "woonplaats": getattr(cov, "woonplaats", "") or record.get("woonplaats", ""),
                     "aantal_huizen": _safe_int(getattr(cov, "aantal_huizen", 0), 0) or 0,
                     "aantal_VBOs": _safe_int(getattr(cov, "aantal_VBOs", 0), 0) or 0,
@@ -943,19 +1115,29 @@ if st.session_state.show_map:
 
     # ========== Kaartlagen ==========
     geojson_dict = {
-        "energiearmoede": gjson_energiearmoede,
-        "koopwoningen": gjson_koopwoningen,
-        "corporatie": gjson_corporatie,
-        "spoordeel": gjson_spoordeel,
-    }
+    "energiearmoede": gjson_energiearmoede,
+    "koopwoningen": gjson_koopwoningen,
+    "corporatie": gjson_corporatie,
+    "spoordeel": gjson_spoordeel,
+    "water_potentie": gjson_water_potentie,
+    "buurt_potentie": gjson_buurt_potentie,
+}
 
     extra_layers = []
     if any([
         st.session_state.get(LAYER_CFG["energiearmoede"]["toggle_key"]),
         st.session_state.get(LAYER_CFG["koopwoningen"]["toggle_key"]),
         st.session_state.get(LAYER_CFG["wooncorporatie"]["toggle_key"]),
+        st.session_state.get(LAYER_CFG["water_potentie"]["toggle_key"]),
+        st.session_state.get(LAYER_CFG["buurt_potentie"]["toggle_key"]),
     ]):
-        extra_layers = create_extra_layers(geojson_dict, ui["woonplaats_selectie"], ui["zoom_level"], ui["extra_opacity"])
+        extra_layers = create_extra_layers(
+            geojson_dict,
+            ui["woonplaats_selectie"],
+            ui["zoom_level"],
+            ui["extra_opacity"],
+            potential_meta,
+        )
 
     bodem_layers = create_bodem_layers(geojson_dict)
 
@@ -977,6 +1159,9 @@ if st.session_state.show_map:
         "bouwjaar",
     ]
     df_hex_view = df_filtered.loc[:, base_hex_cols].copy()
+    df_hex_view["geo_extra_rows"] = ""
+    df_hex_view["gemeente_row_display"] = "block"
+    df_hex_view["buurt_row_display"] = "block"
 
     def _fmt0_val(series):
         return series.astype("int64").map(lambda v: format_dutch_number(int(v), 0))
@@ -1029,6 +1214,9 @@ if st.session_state.show_map:
         "hex_section_display",
         "site_section_display",
         "geo_section_display",
+        "geo_extra_rows",
+        "gemeente_row_display",
+        "buurt_row_display",
     ]
     df_hex_view = df_hex_view.loc[:, cols_for_hex]
     indic_mask = df_filtered["kWh_per_m2"] > threshold

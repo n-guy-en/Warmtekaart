@@ -3,8 +3,9 @@ from __future__ import annotations
 
 import hashlib
 from functools import lru_cache
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Callable
 import math
+import statistics
 
 import pandas as pd
 import streamlit as st
@@ -74,11 +75,30 @@ def legend_labels_from_breaks(breaks):
     return [f"< {pct[0]}%", f"{pct[0]}–{pct[1]}%", f"{pct[1]}–{pct[2]}%", f"≥ {pct[2]}%"]
 
 
-def render_mini_legend(title, colors, labels, *, dark_mode: bool = False):
+def format_numeric_range_labels(breaks, suffix="", decimals: int = 0):
+    if not breaks:
+        return []
+    labels = []
+    fmt_vals = [format_dutch_number(b, decimals) for b in breaks]
+    for idx, val in enumerate(fmt_vals):
+        unit = f" {suffix}" if suffix else ""
+        if idx == 0:
+            labels.append(f"< {val}{unit}")
+        else:
+            prev = fmt_vals[idx - 1]
+            labels.append(f"{prev}{unit} – {val}{unit}")
+    labels.append(f"≥ {fmt_vals[-1]}{(' ' + suffix) if suffix else ''}")
+    return labels
+
+
+def render_mini_legend(title, colors, labels, *, dark_mode: bool = False, footer_html: str | None = None):
     rows = "".join(
         f'<div class="ea-row"><span class="ea-swatch" style="background:rgba({c[0]},{c[1]},{c[2]},{c[3]/255});"></span> {lab}</div>'
         for c, lab in zip(colors, labels)
     )
+    footer_section = ""
+    if footer_html:
+        footer_section = f"<div class='ea-footer'>{footer_html}</div>"
     bg_color = "#111827" if dark_mode else "#ffffff"
     border_color = "#374151" if dark_mode else "#e5e7eb"
     text_color = "#f9fafb" if dark_mode else "#111827"
@@ -97,13 +117,106 @@ def render_mini_legend(title, colors, labels, *, dark_mode: bool = False):
       }}
       .ea-row {{ display:flex; align-items:center; margin:4px 0; }}
       .ea-swatch {{ width:16px; height:12px; border-radius:3px; margin-right:8px; border:1px solid {swatch_border}; }}
+      .ea-footer {{ margin-top:8px; font-size:11px; color:#6b7280; display:flex; align-items:center; gap:6px; }}
+      .ea-footer img {{ height:16px; }}
     </style>
     <div class="ea-legend">
       <div style="font-weight:600; margin-bottom:6px;">{title}</div>
       {rows}
+      {footer_section}
     </div>
     """
     st.markdown(html, unsafe_allow_html=True)
+
+
+def extract_numeric_values(gjson: dict, prop_name: str) -> list[float]:
+    values: list[float] = []
+    if not gjson or not isinstance(gjson, dict):
+        return values
+    for feat in gjson.get("features", []):
+        if not isinstance(feat, dict):
+            continue
+        props = feat.get("properties", {}) or {}
+        try:
+            v = float(props.get(prop_name))
+        except (TypeError, ValueError):
+            continue
+        if math.isfinite(v):
+            values.append(v)
+    return values
+
+
+def compute_quantile_breaks(values: list[float], n_bins: int = 5) -> list[float]:
+    clean = [v for v in values if isinstance(v, (int, float)) and math.isfinite(v)]
+    if not clean or n_bins <= 1:
+        return []
+    clean.sort()
+    if len(set(clean)) == 1:
+        return [clean[0]] * (n_bins - 1)
+    try:
+        quants = statistics.quantiles(clean, n=n_bins, method="inclusive")
+    except Exception:
+        min_v, max_v = clean[0], clean[-1]
+        if min_v == max_v:
+            return [min_v] * (n_bins - 1)
+        step = (max_v - min_v) / n_bins
+        quants = [min_v + step * i for i in range(1, n_bins)]
+    return quants
+
+
+def _color_from_breaks(value: float | None, breaks: list[float], colors: list[List[int]]):
+    if value is None or not math.isfinite(value):
+        return [220, 220, 220, 80]
+    for threshold, color in zip(breaks, colors[:-1]):
+        if value < threshold:
+            return color
+    return colors[-1] if colors else [220, 220, 220, 80]
+
+
+def colorize_numeric_geojson(
+    gjson: dict,
+    prop_name: str,
+    out_prop: str,
+    breaks: list[float],
+    colors: list[List[int]],
+    layer_label: str,
+    value_formatter: Callable[[float | None], str],
+    extra_rows_fn: Callable[[dict], str] | None = None,
+    location_row_display: str = "block",
+):
+    if not gjson or not isinstance(gjson, dict) or gjson.get("type") != "FeatureCollection":
+        return gjson
+
+    feats_new = []
+    for feat in gjson.get("features", []):
+        if not isinstance(feat, dict):
+            continue
+        props = dict((feat.get("properties") or {}))
+        raw_val = props.get(prop_name)
+        try:
+            value = float(raw_val)
+        except (TypeError, ValueError):
+            value = None
+        if value is not None and not math.isfinite(value):
+            value = None
+
+        props[out_prop] = _color_from_breaks(value, breaks, colors)
+        props["_value_display"] = value_formatter(value)
+        props["_layer_label"] = layer_label
+        props.setdefault("gemeentenaam", "")
+        props.setdefault("buurtnaam", "")
+        props["gemeente_row_display"] = location_row_display
+        props["buurt_row_display"] = location_row_display
+        props["geo_section_display"] = "block"
+        props["hex_section_display"] = "none"
+        props["site_section_display"] = "none"
+        extra_html = extra_rows_fn(props) if extra_rows_fn else ""
+        props["geo_extra_rows"] = extra_html
+
+        geom = feat.get("geometry")
+        feats_new.append({"type": "Feature", "properties": props, "geometry": geom})
+
+    return {"type": "FeatureCollection", "features": feats_new}
 
 # ============================================================
 # Nummerformatting & parsing
@@ -316,11 +429,16 @@ def colorize_geojson_cached(gjson: dict, prop_name: str, out_prop: str, breaks: 
         v = props.get(prop_name)
         props[out_prop] = pct_color_from_breaks(v, breaks, colors)
         v_frac = _coerce_frac(v)
-        props["_value_pct_fmt"] = int(round(v_frac * 100, 0)) if v_frac is not None else ""
+        pct_value = int(round(v_frac * 100, 0)) if v_frac is not None else ""
+        props["_value_pct_fmt"] = pct_value
+        props["_value_display"] = ("" if pct_value == "" else f"{pct_value}%")
         props["_layer_label"] = layer_label if layer_label else ""
         # --- Zorg dat buurt/gemeente altijd bestaan voor tooltip
         props["buurtnaam"] = props.get("buurtnaam", "")
         props["gemeentenaam"] = props.get("gemeentenaam", "")
+        props["geo_extra_rows"] = props.get("geo_extra_rows", "")
+        props["gemeente_row_display"] = props.get("gemeente_row_display", "block")
+        props["buurt_row_display"] = props.get("buurt_row_display", "block")
         # --- Display-secties
         props["geo_section_display"]  = "block"
         props["hex_section_display"]  = "none"
@@ -390,9 +508,10 @@ def build_deck_tooltip() -> dict:
       <div class="tooltip-section" style="display:{geo_section_display};">
         <h4>Gebied</h4>
         <div class="tooltip-row"><strong>{_layer_label}</strong></div>
-        <div class="tooltip-row">Waarde: {_value_pct_fmt}%</div>
-        <div class="tooltip-row">Gemeente: {gemeentenaam}</div>
-        <div class="tooltip-row">Buurt: {buurtnaam}</div>
+        <div class="tooltip-row">Waarde: {_value_display}</div>
+        <div class="tooltip-row" style="display:{gemeente_row_display};">Gemeente: {gemeentenaam}</div>
+        <div class="tooltip-row" style="display:{buurt_row_display};">Buurt: {buurtnaam}</div>
+        {geo_extra_rows}
       </div>
       <div class="tooltip-section" style="display:{hex_section_display};">
         <h4>Heat Demand</h4>

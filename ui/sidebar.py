@@ -3,6 +3,9 @@ from __future__ import annotations
 
 from typing import Dict, Any, Tuple, List
 
+import base64
+from pathlib import Path
+
 import numpy as np
 import pandas as pd
 import streamlit as st
@@ -26,8 +29,16 @@ def _is_dark_mode() -> bool:
         base = st.get_option("theme.base")
         if isinstance(base, str) and base.lower() == "dark":
             return True
+        base_is_defined = isinstance(base, str)
     except Exception:
-        pass
+        base_is_defined = False
+    try:
+        bg_color = st.get_option("theme.backgroundColor")
+        if _is_dark_color(bg_color):
+            return True
+    except Exception:
+        if not base_is_defined:
+            pass
     map_style = st.session_state.get("map_style")
     if isinstance(map_style, str) and "dark" in map_style.lower():
         return True
@@ -153,7 +164,33 @@ def _render_bodem_legend(show_spoor: bool, show_water: bool, *, dark_mode: bool)
 # ---------------------------
 # Hoofdfunctie
 # ---------------------------
-def build_sidebar(df_in: pd.DataFrame) -> Tuple[pd.DataFrame, Dict[str, Any]]:
+def _hex_to_rgb(color: str | None):
+    if not color or not isinstance(color, str):
+        return None
+    c = color.strip()
+    if c.startswith("#"):
+        c = c[1:]
+    if len(c) != 6:
+        return None
+    try:
+        r = int(c[0:2], 16)
+        g = int(c[2:4], 16)
+        b = int(c[4:6], 16)
+        return (r, g, b)
+    except ValueError:
+        return None
+
+
+def _is_dark_color(color: str | None) -> bool:
+    rgb = _hex_to_rgb(color)
+    if not rgb:
+        return False
+    r, g, b = rgb
+    brightness = (0.299 * r + 0.587 * g + 0.114 * b) / 255
+    return brightness < 0.5
+
+
+def build_sidebar(df_in: pd.DataFrame, potential_meta: dict | None = None) -> Tuple[pd.DataFrame, Dict[str, Any]]:
     """
     Bouwt de volledige sidebar en retourneert:
       - df (gefilterd)
@@ -211,14 +248,7 @@ def build_sidebar(df_in: pd.DataFrame) -> Tuple[pd.DataFrame, Dict[str, Any]]:
             ui["use_brt_basemap"] = brt_enabled
             st.session_state["use_brt_basemap"] = brt_enabled
 
-            theme_base = None
-            try:
-                theme_base = st.get_option("theme.base")
-            except Exception:
-                theme_base = None
-            dark_theme = isinstance(theme_base, str) and theme_base.lower() == "dark"
-
-            map_theme = "dark" if dark_theme else "light"
+            map_theme = "dark" if dark_mode else "light"
             basemap_style = "brt" if brt_enabled else map_theme
             if brt_enabled:
                 style_desc = BASEMAP_CFG.get("brt", {}).get("legend_html")
@@ -246,7 +276,7 @@ def build_sidebar(df_in: pd.DataFrame) -> Tuple[pd.DataFrame, Dict[str, Any]]:
                 value=st.session_state.get("warmte_hex_opacity", 0.6),
                 step=0.05,
                 key="warmte_hex_opacity",
-                help="0 = transparant (onderliggende lagen zichtbaar) | 1 = dekkend" 
+                help="0 = transparant (onderliggende lagen zichtbaar) | 1 = dekkend"
             )
             ui["threshold"] = st.number_input(
                 "Stel de minimale grenswaarde (threshold) in per kWh/m²:",
@@ -271,21 +301,39 @@ def build_sidebar(df_in: pd.DataFrame) -> Tuple[pd.DataFrame, Dict[str, Any]]:
                 c = LAYER_CFG["energiearmoede"]
                 colors = get_layer_colors(c)
                 labels = legend_labels_from_breaks(c["breaks"])
-                render_mini_legend(c["legend_title"], colors, labels, dark_mode=dark_mode)
+                render_mini_legend(
+                    c["legend_title"],
+                    colors,
+                    labels,
+                    dark_mode=dark_mode,
+                    footer_html="Bron: DataFryslân (2022)",
+                )
 
             show_koopwoningen = st.toggle("Koopwoningen", value=False, key=LAYER_CFG["koopwoningen"]["toggle_key"])
             if show_koopwoningen:
                 c = LAYER_CFG["koopwoningen"]
                 colors = get_layer_colors(c)
                 labels_kw = legend_labels_from_breaks(c["breaks"])
-                render_mini_legend(c["legend_title"], colors, labels_kw, dark_mode=dark_mode)
+                render_mini_legend(
+                    c["legend_title"],
+                    colors,
+                    labels_kw,
+                    dark_mode=dark_mode,
+                    footer_html="Bron: CBS (2023)",
+                )
 
             show_corporatie = st.toggle("Wooncorporatie", value=False, key=LAYER_CFG["wooncorporatie"]["toggle_key"])
             if show_corporatie:
                 c = LAYER_CFG["wooncorporatie"]
                 colors = get_layer_colors(c)
                 labels_wc = legend_labels_from_breaks(c["breaks"])
-                render_mini_legend(c["legend_title"], colors, labels_wc, dark_mode=dark_mode)
+                render_mini_legend(
+                    c["legend_title"],
+                    colors,
+                    labels_wc,
+                    dark_mode=dark_mode,
+                    footer_html="Bron: CBS (2023)",
+                )
 
             if show_energiearmoede or show_koopwoningen or show_corporatie:
                 ui["extra_opacity"] = st.slider(
@@ -297,6 +345,76 @@ def build_sidebar(df_in: pd.DataFrame) -> Tuple[pd.DataFrame, Dict[str, Any]]:
                 )
             else:
                 ui["extra_opacity"] = st.session_state.setdefault("extra_opacity", 0.55)
+
+            # Potentielagen
+            st.subheader("Potentielagen")
+            pot_meta = potential_meta or {}
+
+            def _potentie_footer_html():
+                logo_path = Path("data/logo") / "Logo EXTRAQT black.png"
+                if not logo_path.exists():
+                    return "Bron: EXTRAQT"
+                try:
+                    b64_logo = base64.b64encode(logo_path.read_bytes()).decode("ascii")
+                except Exception:
+                    return "Bron: EXTRAQT"
+                return f"Bron: <img src='data:image/png;base64,{b64_logo}' alt='EXTRAQT logo' />"
+
+            show_water_pot = st.toggle(
+                "Waterlichamen potentie",
+                value=False,
+                key=LAYER_CFG["water_potentie"]["toggle_key"],
+            )
+            ui["show_water_potentie"] = show_water_pot
+            default_water_opacity = pot_meta.get("water_potentie", {}).get("default_opacity", 0.7)
+            if show_water_pot:
+                ui["water_potentie_opacity"] = st.slider(
+                    "Transparantie waterpotentie",
+                    min_value=0.1,
+                    max_value=1.0,
+                    value=float(st.session_state.get("water_potentie_opacity", default_water_opacity)),
+                    step=0.05,
+                    key="water_potentie_opacity",
+                )
+                meta = pot_meta.get("water_potentie")
+                if meta and meta.get("labels"):
+                    render_mini_legend(
+                        LAYER_CFG["water_potentie"]["legend_title"],
+                        meta.get("colors", []),
+                        meta.get("labels", []),
+                        dark_mode=dark_mode,
+                        footer_html=_potentie_footer_html(),
+                    )
+            else:
+                ui["water_potentie_opacity"] = st.session_state.setdefault("water_potentie_opacity", default_water_opacity)
+
+            show_buurt_pot = st.toggle(
+                "Buurtpotentie",
+                value=False,
+                key=LAYER_CFG["buurt_potentie"]["toggle_key"],
+            )
+            ui["show_buurt_potentie"] = show_buurt_pot
+            default_buurt_opacity = pot_meta.get("buurt_potentie", {}).get("default_opacity", 0.7)
+            if show_buurt_pot:
+                ui["buurt_potentie_opacity"] = st.slider(
+                    "Transparantie buurtpotentie",
+                    min_value=0.1,
+                    max_value=1.0,
+                    value=float(st.session_state.get("buurt_potentie_opacity", default_buurt_opacity)),
+                    step=0.05,
+                    key="buurt_potentie_opacity",
+                )
+                meta = pot_meta.get("buurt_potentie")
+                if meta and meta.get("labels"):
+                    render_mini_legend(
+                        LAYER_CFG["buurt_potentie"]["legend_title"],
+                        meta.get("colors", []),
+                        meta.get("labels", []),
+                        dark_mode=dark_mode,
+                        footer_html=_potentie_footer_html(),
+                    )
+            else:
+                ui["buurt_potentie_opacity"] = st.session_state.setdefault("buurt_potentie_opacity", default_buurt_opacity)
 
             # Bodemlagen
             st.subheader("Bodemlagen")
@@ -470,6 +588,7 @@ def build_sidebar(df_in: pd.DataFrame) -> Tuple[pd.DataFrame, Dict[str, Any]]:
                 st.markdown(info_html, unsafe_allow_html=True)
                 ui["show_sites_layer"] = False
                 st.session_state["show_sites_layer"] = False
+                ui["sites_hex_opacity"] = default_site_opacity
             else:
                 st.markdown(info_html, unsafe_allow_html=True)
                 ui["show_sites_layer"] = st.toggle(
@@ -572,6 +691,8 @@ def build_sidebar(df_in: pd.DataFrame) -> Tuple[pd.DataFrame, Dict[str, Any]]:
             ui["reset_manual_site"] = reset_manual
             if "sites_mode" not in ui:
                 ui["sites_mode"] = st.session_state.get("sites_mode", "auto")
+            if "sites_hex_opacity" not in ui:
+                ui["sites_hex_opacity"] = default_site_opacity
 
         # ---------------- Uitleg-blokken ----------------
         st.header("Uitleg")

@@ -88,6 +88,12 @@ WOONCORPORATIE_PATH = _env_path(
 )
 SPOORDEEL_PATH = _env_path("WARMTE_LYR_SPOORDEEL", LAYERS_DIR / "spoordeel.geojson.gz")
 WATERDEEL_PATH = _env_path_opt("WARMTE_LYR_WATERDEEL", None)
+WATER_POTENTIE_PATH = _env_path(
+    "WARMTE_LYR_WATER_POTENTIE", LAYERS_DIR / "waterlichamen_potentie_extraqt.geojson.gz"
+)
+BUURT_POTENTIE_PATH = _env_path(
+    "WARMTE_LYR_BUURT_POTENTIE", LAYERS_DIR / "buurt_potentie_extraqt.geojson.gz"
+)
 
 
 # ================================
@@ -142,6 +148,27 @@ LAYER_CFG = {
         "alpha": 180,
         "legend_title": "Water (bodemlaag)",
         "line_color": [36, 122, 212, 255],
+    },
+    "water_potentie": {
+        "toggle_key": "show_water_potentie",
+        "prop_name": "Potentie_kWh",
+        "out_prop": "_water_pot_color",
+        "palette": "YlGnBu",
+        "n_colors": 5,
+        "alpha": 210,
+        "legend_title": "Waterlichamen potentie (kWh)",
+        "tooltip_unit": "kWh",
+        "line_color": [15, 70, 110, 140],
+    },
+    "buurt_potentie": {
+        "toggle_key": "show_buurt_potentie",
+        "prop_name": "Perc_covered",
+        "out_prop": "_buurt_pot_color",
+        "palette": "YlOrRd",
+        "n_colors": 5,
+        "alpha": 210,
+        "legend_title": "Buurtpotentie (% gedekt)",
+        "tooltip_unit": "%",
     },
 }
 

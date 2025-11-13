@@ -12,6 +12,7 @@ from .utils import (
     _spoor_rgb_from_cfg,
     get_dynamic_line_width,
     colorize_geojson_cached,
+    colorize_numeric_geojson,
     format_dutch_number,
 )
 
@@ -404,7 +405,13 @@ def _geojson_layer(data, name, fill_color, line_color, opacity=0.5):
         opacity=float(opacity),
     )
 
-def create_extra_layers(geojson_dict: dict, woonplaats_selectie: list[str], zoom_level: int, extra_opacity: float = 0.4):
+def create_extra_layers(
+    geojson_dict: dict,
+    woonplaats_selectie: list[str],
+    zoom_level: int,
+    extra_opacity: float = 0.4,
+    potential_meta: dict | None = None,
+):
     """
     Woonlagen:
     - filteren op zoom+woonplaats
@@ -413,6 +420,7 @@ def create_extra_layers(geojson_dict: dict, woonplaats_selectie: list[str], zoom
     """
     layers = []
     cfg = LAYER_CFG
+    potential_meta = potential_meta or {}
 
     # Energiearmoede
     if st.session_state.get(cfg["energiearmoede"]["toggle_key"]):
@@ -464,6 +472,62 @@ def create_extra_layers(geojson_dict: dict, woonplaats_selectie: list[str], zoom
             opacity=st.session_state.get("extra_opacity", extra_opacity),
         )
         if lyr: layers.append(lyr)
+
+    # Waterpotentie
+    if st.session_state.get(cfg["water_potentie"]["toggle_key"]):
+        meta = potential_meta.get("water_potentie")
+        gjson_src = geojson_dict.get("water_potentie")
+        if meta and gjson_src and meta.get("breaks"):
+            colored = colorize_numeric_geojson(
+                gjson_src,
+                cfg["water_potentie"]["prop_name"],
+                cfg["water_potentie"]["out_prop"],
+                meta["breaks"],
+                meta["colors"],
+                cfg["water_potentie"]["legend_title"],
+                meta["value_formatter"],
+                meta.get("extra_rows_fn"),
+                meta.get("location_row_display", "block"),
+            )
+            lyr = _geojson_layer(
+                colored,
+                "water_potentie",
+                fill_color=f"properties.{cfg['water_potentie']['out_prop']}",
+                line_color=cfg["water_potentie"].get("line_color", [255, 255, 255, 60]),
+                opacity=st.session_state.get("water_potentie_opacity", meta.get("default_opacity", 0.7)),
+            )
+            if lyr:
+                layers.append(lyr)
+
+    # Buurtpotentie
+    if st.session_state.get(cfg["buurt_potentie"]["toggle_key"]):
+        meta = potential_meta.get("buurt_potentie")
+        gjson_src = filter_geojson_by_selection(
+            geojson_dict.get("buurt_potentie"),
+            woonplaats_selectie,
+            zoom_level,
+        )
+        if meta and gjson_src and meta.get("breaks"):
+            colored = colorize_numeric_geojson(
+                gjson_src,
+                cfg["buurt_potentie"]["prop_name"],
+                cfg["buurt_potentie"]["out_prop"],
+                meta["breaks"],
+                meta["colors"],
+                cfg["buurt_potentie"]["legend_title"],
+                meta["value_formatter"],
+                meta.get("extra_rows_fn"),
+                meta.get("location_row_display", "block"),
+            )
+            lyr = _geojson_layer(
+                colored,
+                "buurt_potentie",
+                fill_color=f"properties.{cfg['buurt_potentie']['out_prop']}",
+                line_color=cfg["wooncorporatie"].get("line_color", [0, 0, 0, 120]),
+                opacity=st.session_state.get("buurt_potentie_opacity", meta.get("default_opacity", 0.7)),
+            )
+            if lyr:
+                layers.append(lyr)
 
     return layers
 
