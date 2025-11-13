@@ -108,21 +108,80 @@ def render_tabs(df_filtered: pd.DataFrame, threshold: float, show_sites_layer: b
         # Beperk kolommen vóór groupby
         col_wp = "woonplaats"
         col_mwh = "gemiddeld_jaarverbruik_mWh"
-        df_wp = df_filtered.loc[:, [col_wp, col_mwh]] if {col_wp, col_mwh} <= set(df_filtered.columns) else pd.DataFrame(columns=[col_wp, col_mwh])
+        col_density = "MWh_per_ha"
+        col_area = "area_ha"
+        available_cols = set(df_filtered.columns)
+
+        use_area = col_area in available_cols
+        use_density_col = col_density in available_cols
+
+        base_cols = [col_wp, col_mwh]
+        if use_area:
+            base_cols.append(col_area)
+        if use_density_col and not use_area:
+            # alleen meenemen als area ontbreekt; anders berekenen we het zelf
+            base_cols.append(col_density)
+
+        if set(base_cols) <= available_cols:
+            df_wp = df_filtered.loc[:, base_cols]
+        else:
+            missing_cols = set(base_cols) - available_cols
+            if missing_cols:
+                # kan gebeuren bij lege datasets; maak lege df
+                df_wp = pd.DataFrame(columns=base_cols)
+            else:
+                df_wp = df_filtered.loc[:, base_cols]
 
         if not df_wp.empty:
             s = pd.to_numeric(df_wp[col_mwh], errors="coerce").fillna(0)
+            df_wp = df_wp.assign(**{col_mwh: s})
+
+            agg_map = {col_mwh: "sum"}
+            if use_area:
+                area_series = pd.to_numeric(df_wp[col_area], errors="coerce").fillna(0)
+                df_wp[col_area] = area_series
+                agg_map[col_area] = "sum"
+                density_source = "area"
+            elif use_density_col:
+                density_series = pd.to_numeric(df_wp[col_density], errors="coerce")
+                df_wp[col_density] = density_series
+                agg_map[col_density] = "mean"
+                density_source = "col"
+            else:
+                density_source = None
+
             top_wp = (
-                df_wp.assign(**{col_mwh: s})
-                      .groupby(col_wp, as_index=False, sort=False, observed=True)[col_mwh]
-                      .sum()
-                      .rename(columns={col_mwh: "MWh"})
+                df_wp.groupby(col_wp, as_index=False, sort=False, observed=True)
+                     .agg(agg_map)
+                     .rename(columns={col_mwh: "MWh"})
                       .sort_values("MWh", ascending=False)
                       .head(15)
             )
+
+            area_display_col = "Gebiedsoppervlakte voor warmtevraag (ha)"
+            density_display_col = "Warmtevraag per ha (MWh)"
+
+            if use_area and col_area in top_wp.columns:
+                top_wp.rename(columns={col_area: area_display_col}, inplace=True)
+                area_vals = top_wp[area_display_col].replace({0: pd.NA})
+                top_wp[density_display_col] = top_wp["MWh"].div(area_vals)
+            elif density_source == "col" and col_density in top_wp.columns:
+                top_wp.rename(columns={col_density: density_display_col}, inplace=True)
+            else:
+                # geen bron beschikbaar; maak lege kolom
+                top_wp[density_display_col] = pd.NA
+
             # Vectorized formatting (vermijd apply lambda per rij waar mogelijk)
             top_wp_fmt = top_wp.copy()
             top_wp_fmt["MWh"] = top_wp_fmt["MWh"].round(0).astype("int64").map(lambda v: f"{v:,}".replace(",", "."))
+            if area_display_col in top_wp_fmt.columns:
+                top_wp_fmt[area_display_col] = top_wp_fmt[area_display_col].map(
+                    lambda v: "" if pd.isna(v) else _fmt2(float(v))
+                )
+            if density_display_col in top_wp_fmt.columns:
+                top_wp_fmt[density_display_col] = top_wp_fmt[density_display_col].map(
+                    lambda v: "" if pd.isna(v) else _fmt2(float(v))
+                )
             st.dataframe(top_wp_fmt, width="stretch", height=420, hide_index=True)
         else:
             st.info("Geen gegevens om te tonen.")
