@@ -347,7 +347,7 @@ def build_sidebar(df_in: pd.DataFrame, potential_meta: dict | None = None) -> Tu
                 ui["extra_opacity"] = st.session_state.setdefault("extra_opacity", 0.55)
 
             # Potentielagen
-            st.subheader("Potentielagen")
+            st.subheader("Aquathermie potentielagen EXTRAQT")
             pot_meta = potential_meta or {}
 
             def _potentie_footer_html():
@@ -389,7 +389,7 @@ def build_sidebar(df_in: pd.DataFrame, potential_meta: dict | None = None) -> Tu
                 ui["water_potentie_opacity"] = st.session_state.setdefault("water_potentie_opacity", default_water_opacity)
 
             show_buurt_pot = st.toggle(
-                "Buurtpotentie",
+                "Buurtpotentie uit aquathermie",
                 value=False,
                 key=LAYER_CFG["buurt_potentie"]["toggle_key"],
             )
@@ -397,7 +397,7 @@ def build_sidebar(df_in: pd.DataFrame, potential_meta: dict | None = None) -> Tu
             default_buurt_opacity = pot_meta.get("buurt_potentie", {}).get("default_opacity", 0.7)
             if show_buurt_pot:
                 ui["buurt_potentie_opacity"] = st.slider(
-                    "Transparantie buurtpotentie",
+                    "Transparantie buurtpotentie uit aquathermie",
                     min_value=0.1,
                     max_value=1.0,
                     value=float(st.session_state.get("buurt_potentie_opacity", default_buurt_opacity)),

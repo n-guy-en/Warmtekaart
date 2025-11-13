@@ -167,7 +167,7 @@ LAYER_CFG = {
         "palette": "YlOrRd",
         "n_colors": 5,
         "alpha": 210,
-        "legend_title": "Buurtpotentie (% gedekt)",
+        "legend_title": "Buurtpotentie uit aquathermie (% gedekt)",
         "tooltip_unit": "%",
     },
 }
