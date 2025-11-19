@@ -6,10 +6,9 @@ from typing import Iterable, List, Dict, Any, Union
 import pydeck as pdk
 import streamlit as st
 
-from .config import LAYER_CFG, BASEMAP_CFG, WATERDEEL_PATH
+from .config import LAYER_CFG, BASEMAP_CFG
 from .utils import (
     get_layer_colors,
-    _spoor_rgb_from_cfg,
     get_dynamic_line_width,
     colorize_geojson_cached,
     colorize_numeric_geojson,
@@ -532,49 +531,140 @@ def create_extra_layers(
     return layers
 
 # ------------------------------------------------------------
-# Bodemlagen (spoor/water)
+# Warmtenet model (bronnen + leidingen)
 # ------------------------------------------------------------
-def create_bodem_layers(geojson_dict: dict):
-    """
-    Bodemlagen onder de woonlagen:
-    - Spoor: GeoJson lijnen
-    - Water: MVT (uit URL) of niets als WATERDEEL_PATH None is.
-    """
-    layers = []
-    cfg = LAYER_CFG
+def _warmtenet_extra_rows(props: dict) -> str:
+    """Stel tooltip-rijen samen voor de warmtenetlaag."""
+    def _fmt(val, decimals: int = 1):
+        try:
+            return format_dutch_number(float(val), decimals)
+        except Exception:
+            return None
 
-    # Spoor (GeoJSON -> lijn)
-    wc_spoor = cfg["spoordeel"]
-    if st.session_state.get(wc_spoor["toggle_key"]) and geojson_dict.get("spoordeel"):
-        r, g, b = _spoor_rgb_from_cfg(cfg)
+    rows = []
+    woonplaats = props.get("woonplaats")
+    bron_id = props.get("bron_id") or props.get("bron_key")
+    gegevensbron = props.get("type_bron") or props.get("gegevensbron")
+
+    if woonplaats:
+        rows.append(f"<div class='tooltip-row'>Woonplaats: {woonplaats}</div>")
+    if bron_id:
+        rows.append(f"<div class='tooltip-row'>Bron: {bron_id}</div>")
+    if gegevensbron:
+        rows.append(f"<div class='tooltip-row'>Gegevensbron: {gegevensbron}</div>")
+
+    bron_mwh = _fmt(props.get("bron_mwh_per_jaar"), decimals=0)
+    if bron_mwh:
+        rows.append(f"<div class='tooltip-row'>MWh per jaar: {bron_mwh}</div>")
+    vraag_mwh = _fmt(props.get("vraag_mwh_per_jaar"), decimals=1)
+    if vraag_mwh:
+        rows.append(f"<div class='tooltip-row'>Vraag MWh per jaar: {vraag_mwh}</div>")
+    pad_len = _fmt(props.get("padlengte_m") or props.get("geometrie_lengte_m"), decimals=0)
+    if pad_len:
+        rows.append(f"<div class='tooltip-row'>Padlengte (m): {pad_len}</div>")
+
+    return "".join(rows)
+
+
+def _prepare_warmtenet_props(props: dict, *, color: list[int], layer_label: str) -> dict:
+    """Verrijk properties voor tooltip en kleurgebruik."""
+    prepared = dict(props or {})
+    prepared["color"] = color
+    prepared["_layer_label"] = layer_label
+    prepared["_value_display"] = ""
+    prepared["gemeente_row_display"] = "none"
+    prepared["buurt_row_display"] = "none"
+    prepared["geo_section_display"] = "block"
+    prepared["hex_section_display"] = "none"
+    prepared["site_section_display"] = "none"
+    prepared["geo_extra_rows"] = _warmtenet_extra_rows(prepared)
+    return prepared
+
+
+def create_warmtenet_layers(
+    gjson: dict | None,
+    woonplaatsen: list[str],
+    color_map: dict[str, list[int]],
+    allowed_keys: list[str] | None = None,
+    type_by_key: dict[str, str] | None = None,
+    allowed_types: list[str] | None = None,
+    opacity: float = 0.85,
+):
+    """
+    Bouw lagen voor warmtenet-model:
+    - GeoJsonLayer voor leidingen (LineString)
+    - ScatterplotLayer voor bron-punten
+    """
+    if not gjson or not isinstance(gjson, dict):
+        return []
+
+    allowed = {str(k).strip() for k in allowed_keys} if allowed_keys else None
+    allowed_types_set = {str(t).strip().lower() for t in allowed_types} if allowed_types else None
+    wp_filter = {str(w).strip().lower() for w in woonplaatsen} if woonplaatsen else None
+    layer_label = LAYER_CFG.get("warmtenet_model", {}).get("legend_title", "Warmtebronnen (model)")
+    default_color = [120, 120, 120, 220]
+
+    line_feats = []
+    point_records = []
+
+    for feat in gjson.get("features", []):
+        if not isinstance(feat, dict):
+            continue
+        props = feat.get("properties") or {}
+        wp = str(props.get("woonplaats") or "").strip().lower()
+        if wp_filter and wp not in wp_filter:
+            continue
+        bron_key = str(props.get("bron_key") or "").strip()
+        if allowed and bron_key not in allowed:
+            continue
+        if allowed_types_set:
+            tb = (type_by_key or {}).get(bron_key, "")
+            if str(tb).strip().lower() not in allowed_types_set:
+                continue
+        color = color_map.get(bron_key, default_color)
+        prepared_props = _prepare_warmtenet_props(props, color=color, layer_label=layer_label)
+
+        geom = feat.get("geometry") or {}
+        geom_type = geom.get("type")
+        if geom_type == "Point":
+            coords = geom.get("coordinates") or [None, None]
+            point_records.append({
+                "position": coords,
+                **prepared_props,
+            })
+        else:
+            line_feats.append({
+                "type": "Feature",
+                "properties": prepared_props,
+                "geometry": geom,
+            })
+
+    layers = []
+    if line_feats:
         layers.append(pdk.Layer(
             "GeoJsonLayer",
-            data=geojson_dict["spoordeel"],
-            pickable=False,
+            data={"type": "FeatureCollection", "features": line_feats},
+            pickable=True,
             stroked=True,
             filled=False,
-            extruded=False,
-            get_line_color=[r, g, b, 255],
-            get_line_width=2,
-            lineWidthMinPixels=2.5,
-            opacity=float(st.session_state.get("spoor_opacity", 0.5)),
+            get_line_color="properties.color",
+            get_line_width=3,
+            lineWidthMinPixels=2,
+            opacity=float(opacity),
         ))
 
-    # Water (MVT uit MBTiles via URL, alleen als path/URL gezet is)
-    wc_water = cfg["waterdeel"]
-    if st.session_state.get(wc_water["toggle_key"]) and WATERDEEL_PATH:
-        r_w, g_w, b_w = int(wc_water["palette"][0]), int(wc_water["palette"][1]), int(wc_water["palette"][2])
+    if point_records:
         layers.append(pdk.Layer(
-            "MVTLayer",
-            data=WATERDEEL_PATH,
-            pickable=False,
-            filled=True,
+            "ScatterplotLayer",
+            point_records,
+            pickable=True,
+            get_position="position",
+            get_fill_color="color",
+            get_line_color=[25, 25, 25, 220],
+            radius_min_pixels=5,
+            radius_max_pixels=14,
             stroked=True,
-            get_fill_color=[r_w, g_w, b_w, int(wc_water.get("alpha", 180))],
-            get_line_color=[r_w, g_w, b_w, 255],
-            lineWidthMinPixels=1,
-            opacity=float(st.session_state.get("water_opacity", 0.6)),
-            # minZoom=6, maxZoom=18,  # optioneel
+            opacity=float(opacity),
         ))
 
     return layers

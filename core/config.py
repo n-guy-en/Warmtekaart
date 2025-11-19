@@ -86,13 +86,14 @@ KOOPWONINGEN_PATH = _env_path(
 WOONCORPORATIE_PATH = _env_path(
     "WARMTE_LYR_WOONCORPORATIE", LAYERS_DIR / "wooncorporatie_frl.geojson.gz"
 )
-SPOORDEEL_PATH = _env_path("WARMTE_LYR_SPOORDEEL", LAYERS_DIR / "spoordeel.geojson.gz")
-WATERDEEL_PATH = _env_path_opt("WARMTE_LYR_WATERDEEL", None)
 WATER_POTENTIE_PATH = _env_path(
     "WARMTE_LYR_WATER_POTENTIE", LAYERS_DIR / "waterlichamen_potentie_extraqt.geojson.gz"
 )
 BUURT_POTENTIE_PATH = _env_path(
     "WARMTE_LYR_BUURT_POTENTIE", LAYERS_DIR / "buurt_potentie_extraqt.geojson.gz"
+)
+WARMTENET_PATH = _env_path(
+    "WARMTE_LYR_WARMTENET", LAYERS_DIR / "warmtenet_full.geojson.gz"
 )
 
 
@@ -133,22 +134,6 @@ LAYER_CFG = {
         "legend_title": "Wooncorporaties (% woningen)",
         "line_color": [60, 40, 120, 120],
     },
-    "spoordeel": {
-        "toggle_key": "show_spoordeel",
-        "out_prop": "_wd_color",
-        "palette": [0, 0, 0],
-        "alpha": 200,
-        "legend_title": "Spoordeel",
-        "line_color": [0, 0, 0, 255],
-    },
-    "waterdeel": {
-        "toggle_key": "show_waterdeel",
-        "out_prop": "_water_color",
-        "palette": [36, 122, 212],
-        "alpha": 180,
-        "legend_title": "Water (bodemlaag)",
-        "line_color": [36, 122, 212, 255],
-    },
     "water_potentie": {
         "toggle_key": "show_water_potentie",
         "prop_name": "Potentie_kWh",
@@ -169,6 +154,12 @@ LAYER_CFG = {
         "alpha": 210,
         "legend_title": "Buurtpotentie uit aquathermie (% gedekt)",
         "tooltip_unit": "%",
+    },
+    "warmtenet_model": {
+        "toggle_key": "show_warmtenet_model",
+        "legend_title": "Warmtebronnen (model)",
+        "palette": "hsv",
+        "alpha": 230,
     },
 }
 
