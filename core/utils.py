@@ -59,6 +59,17 @@ def get_layer_colors(layer_cfg: dict):
     )
 
 
+def _spoor_rgb_from_cfg(cfg: dict):
+    """Returns (r,g,b) voor spoor uit LAYER_CFG['spoordeel'].""" 
+    wc = cfg["spoordeel"]
+    base = wc.get("palette", [0, 0, 0])
+    if isinstance(base, (list, tuple)) and len(base) >= 3:
+        r, g, b = int(base[0]), int(base[1]), int(base[2])
+    else:
+        r, g, b = 160, 189, 190
+    return r, g, b
+
+
 def legend_labels_from_breaks(breaks):
     pct = [int(b * 100) for b in breaks]
     return [f"< {pct[0]}%", f"{pct[0]}–{pct[1]}%", f"{pct[1]}–{pct[2]}%", f"≥ {pct[2]}%"]
@@ -81,15 +92,10 @@ def format_numeric_range_labels(breaks, suffix="", decimals: int = 0):
 
 
 def render_mini_legend(title, colors, labels, *, dark_mode: bool = False, footer_html: str | None = None):
-    row_htmls = []
-    for color, label in zip(colors, labels):
-        if color is None:
-            row_htmls.append(f'<div class="ea-row ea-row-heading">{label}</div>')
-        else:
-            row_htmls.append(
-                f'<div class="ea-row"><span class="ea-swatch" style="background:rgba({color[0]},{color[1]},{color[2]},{color[3]/255});"></span> {label}</div>'
-            )
-    rows = "".join(row_htmls)
+    rows = "".join(
+        f'<div class="ea-row"><span class="ea-swatch" style="background:rgba({c[0]},{c[1]},{c[2]},{c[3]/255});"></span> {lab}</div>'
+        for c, lab in zip(colors, labels)
+    )
     footer_section = ""
     if footer_html:
         footer_section = f"<div class='ea-footer'>{footer_html}</div>"
@@ -110,10 +116,6 @@ def render_mini_legend(title, colors, labels, *, dark_mode: bool = False, footer
         margin-bottom:20px;
       }}
       .ea-row {{ display:flex; align-items:center; margin:4px 0; }}
-      .ea-row-heading {{
-        font-weight:600;
-        margin:8px 0 2px 0;
-      }}
       .ea-swatch {{ width:16px; height:12px; border-radius:3px; margin-right:8px; border:1px solid {swatch_border}; }}
       .ea-footer {{ margin-top:8px; font-size:11px; color:#6b7280; display:flex; align-items:center; gap:6px; }}
       .ea-footer img {{ height:16px; }}

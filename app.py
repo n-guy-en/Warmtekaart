@@ -21,9 +21,10 @@ from core.config import (
     ENERGIEARMOEDE_PATH,
     KOOPWONINGEN_PATH,
     WOONCORPORATIE_PATH,
+    SPOORDEEL_PATH,
+    WATERDEEL_PATH,
     WATER_POTENTIE_PATH,
     BUURT_POTENTIE_PATH,
-    WARMTENET_PATH,
 )
 from core.utils import (
     format_dutch_number,
@@ -41,8 +42,8 @@ from core.layers import (
     create_layers_by_zoom,
     create_indicative_area_layer,
     create_site_layers,
+    create_bodem_layers,
     create_extra_layers,
-    create_warmtenet_layers,
 )
 from core.h3sites import (
     shortlist_centers,
@@ -238,82 +239,6 @@ def _build_buurt_potential_meta(gjson: dict) -> dict:
         "location_row_display": "block",
     }
 
-def _build_warmtenet_meta(gjson: dict | None) -> dict:
-    """Maak kleur- en legenda-info voor warmtenet model."""
-    base_meta = {
-        "color_map": {},
-        "labels": {},
-        "default_opacity": 0.85,
-        "woonplaatsen": [],
-        "types": [],
-        "type_by_key": {},
-        "wp_by_key": {},
-    }
-    if not gjson or not isinstance(gjson, dict):
-        return base_meta
-
-    def _distinct_colors(n: int, alpha: int) -> list[list[int]]:
-        # verdeel tinten via golden ratio en varieer lichtheid om vergelijkbare tinten te voorkomen
-        import colorsys
-        colors = []
-        if n <= 0:
-            return colors
-        for i in range(n):
-            hue = (i * 0.618033988749895) % 1.0
-            sat = 0.65
-            val = 0.90 - (0.12 * ((i % 3) / 3))  # kleine variatie in helderheid
-            r, g, b = colorsys.hsv_to_rgb(hue, sat, val)
-            colors.append([int(r * 255), int(g * 255), int(b * 255), alpha])
-        return colors
-
-    labels: dict[str, dict[str, str]] = {}
-    all_keys: list[str] = []
-    woonplaatsen_all: set[str] = set()
-    types_all: set[str] = set()
-    type_by_key: dict[str, str] = {}
-    wp_by_key: dict[str, str] = {}
-    for feat in gjson.get("features", []):
-        props = feat.get("properties") or {}
-        key = str(props.get("bron_key") or "").strip()
-        if not key:
-            continue
-        woonplaats_raw = str(props.get("woonplaats") or "").strip()
-        bron_label = str(props.get("bron_id") or "").strip()
-        type_bron = str(props.get("type_bron") or props.get("gegevensbron") or "").strip()
-        if not bron_label and "__" in key:
-            bron_label = key.split("__", 1)[1]
-        pretty_label = bron_label or key
-        labels.setdefault(key, {
-            "label": pretty_label,
-            "woonplaats_norm": woonplaats_raw.lower(),
-        })
-        all_keys.append(key)
-        wp_by_key[key] = woonplaats_raw
-        type_by_key[key] = type_bron
-        if woonplaats_raw:
-            woonplaatsen_all.add(woonplaats_raw)
-        if type_bron:
-            types_all.add(type_bron)
-
-    unique_keys = sorted(set(all_keys))
-    if not unique_keys:
-        return base_meta
-
-    cfg = LAYER_CFG.get("warmtenet_model", {})
-    alpha = cfg.get("alpha", 230)
-    colors = _distinct_colors(len(unique_keys), alpha)
-    color_map = {key: colors[idx % len(colors)] for idx, key in enumerate(unique_keys)}
-
-    return {
-        "color_map": color_map,
-        "labels": labels,
-        "default_opacity": 0.85,
-        "woonplaatsen": sorted(woonplaatsen_all),
-        "types": sorted(types_all),
-        "type_by_key": type_by_key,
-        "wp_by_key": wp_by_key,
-    }
-
 # (optioneel) live RAM-meting in sidebar
 #try:
 #    import psutil, os
@@ -377,6 +302,11 @@ gjson_corporatie = load_geojson(
     keep_props=[LAYER_CFG["wooncorporatie"]["prop_name"], *_gj_common_props],
     coord_precision=3
 )
+gjson_spoordeel = load_geojson(
+    SPOORDEEL_PATH,
+    keep_props=[],
+    coord_precision=3
+)
 gjson_water_potentie = load_geojson(
     WATER_POTENTIE_PATH,
     keep_props=["Potentie_kWh", "id"],
@@ -389,37 +319,18 @@ gjson_buurt_potentie = load_geojson(
     coord_precision=5,
 )
 gjson_buurt_potentie = _convert_geojson_to_wgs84_if_needed(gjson_buurt_potentie)
-gjson_warmtenet = load_geojson(
-    WARMTENET_PATH,
-    keep_props=[
-        "layer",
-        "woonplaats",
-        "bron_key",
-        "bron_id",
-        "vraag_id",
-        "gegevensbron",
-        "type_bron",
-        "bron_mwh_per_jaar",
-        "vraag_mwh_per_jaar",
-        "padlengte_m",
-        "geometrie_lengte_m",
-    ],
-    coord_precision=5,
-)
-gjson_warmtenet = _convert_geojson_to_wgs84_if_needed(gjson_warmtenet)
 
 potential_meta: dict[str, dict] = {}
 if gjson_water_potentie:
     potential_meta["water_potentie"] = _build_water_potential_meta(gjson_water_potentie)
 if gjson_buurt_potentie:
     potential_meta["buurt_potentie"] = _build_buurt_potential_meta(gjson_buurt_potentie)
-warmtenet_meta = _build_warmtenet_meta(gjson_warmtenet)
 
 df_raw = load_data()
 _log_ram("after_load_data")
 
 # ========== Sidebar / UI ==========
-sidebar_out = build_sidebar(df_raw, potential_meta, warmtenet_meta)
+sidebar_out = build_sidebar(df_raw, potential_meta)
 map_button_clicked_sidebar = False
 if isinstance(sidebar_out, tuple):
     if len(sidebar_out) == 3:
@@ -500,6 +411,10 @@ def _build_filters_snapshot(ui: dict) -> dict:
         "water_potentie_opacity": _as_float(ui.get("water_potentie_opacity", st.session_state.get("water_potentie_opacity", 0.7))),
         L["buurt_potentie"]["toggle_key"]:  bool(st.session_state.get(L["buurt_potentie"]["toggle_key"], False)),
         "buurt_potentie_opacity": _as_float(ui.get("buurt_potentie_opacity", st.session_state.get("buurt_potentie_opacity", 0.7))),
+        L["spoordeel"]["toggle_key"]:       bool(st.session_state.get(L["spoordeel"]["toggle_key"], False)),
+        L["waterdeel"]["toggle_key"]:       bool(st.session_state.get(L["waterdeel"]["toggle_key"], False)),
+        "spoor_opacity":       _as_float(ui.get("spoor_opacity", 0.5)),
+        "water_opacity":       _as_float(ui.get("water_opacity", 0.6)),
         "participatie":        _as_int(ui.get("participatie", st.session_state.get("participatie", 80))),
         "show_sites_layer":    bool(ui.get("show_sites_layer", False)),
         "sites_hex_opacity":   _as_float(ui.get("sites_hex_opacity", st.session_state.get("sites_hex_opacity", 0.85))),
@@ -1200,13 +1115,13 @@ if st.session_state.show_map:
 
     # ========== Kaartlagen ==========
     geojson_dict = {
-        "energiearmoede": gjson_energiearmoede,
-        "koopwoningen": gjson_koopwoningen,
-        "corporatie": gjson_corporatie,
-        "water_potentie": gjson_water_potentie,
-        "buurt_potentie": gjson_buurt_potentie,
-        "warmtenet": gjson_warmtenet,
-    }
+    "energiearmoede": gjson_energiearmoede,
+    "koopwoningen": gjson_koopwoningen,
+    "corporatie": gjson_corporatie,
+    "spoordeel": gjson_spoordeel,
+    "water_potentie": gjson_water_potentie,
+    "buurt_potentie": gjson_buurt_potentie,
+}
 
     extra_layers = []
     if any([
@@ -1224,17 +1139,7 @@ if st.session_state.show_map:
             potential_meta,
         )
 
-    warmtenet_layers: list[pdk.Layer] = []
-    if ui.get("show_warmtenet_model") and gjson_warmtenet:
-        warmtenet_layers = create_warmtenet_layers(
-            gjson_warmtenet,
-            ui.get("warmtenet_wp_selectie", ui.get("woonplaats_selectie", [])),
-            (warmtenet_meta or {}).get("color_map", {}),
-            ui.get("warmtenet_selected_keys", []),
-            (warmtenet_meta or {}).get("type_by_key", {}),
-            ui.get("warmtenet_type_selectie", []),
-            opacity=float(ui.get("warmtenet_opacity", (warmtenet_meta or {}).get("default_opacity", 0.85))),
-        )
+    bodem_layers = create_bodem_layers(geojson_dict)
 
     # H3 hoofdlaag(en) per zoom
     base_hex_cols = [
@@ -1344,8 +1249,8 @@ if st.session_state.show_map:
     basemap_style = ui.get("basemap_style", ui.get("map_style"))
     base_layers = build_base_layers(basemap_style, hide_bg)
 
-    # Volgorde: basemap -> woonlagen -> H3/indicatief/sites
-    all_layers = base_layers + extra_layers + layers + warmtenet_layers + site_layers
+    # Volgorde: basemap -> bodem -> woonlagen -> H3/indicatief/sites
+    all_layers = base_layers + bodem_layers + extra_layers + layers + site_layers
 
     # ========== ViewState ==========
     def _view_for_selection(df_full, woonplaatsen_geselecteerd):
@@ -1442,7 +1347,7 @@ if st.session_state.show_map:
                 st.session_state["manual_site_h3"] = selected_hex
 
     # Opruimen om RAM-pieken terug te geven
-    del deck, all_layers, layers, base_layers, extra_layers, warmtenet_layers, df_hex_view
+    del deck, all_layers, layers, base_layers, bodem_layers, extra_layers, df_hex_view
     sites_records = None
     sites_costed_records = None
     gc.collect()
