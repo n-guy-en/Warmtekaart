@@ -571,7 +571,6 @@ def _prepare_warmtenet_props(props: dict, *, color: list[int], layer_label: str)
     prepared = dict(props or {})
     prepared["color"] = color
     prepared["_layer_label"] = layer_label
-    prepared["_value_display"] = ""
     prepared["gemeente_row_display"] = "none"
     prepared["buurt_row_display"] = "none"
     prepared["geo_section_display"] = "block"

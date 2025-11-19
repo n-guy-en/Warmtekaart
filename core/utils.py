@@ -506,7 +506,6 @@ def build_deck_tooltip() -> dict:
       <div class="tooltip-section" style="display:{geo_section_display};">
         <h4>Gebied</h4>
         <div class="tooltip-row"><strong>{_layer_label}</strong></div>
-        <div class="tooltip-row">Waarde: {_value_display}</div>
         <div class="tooltip-row" style="display:{gemeente_row_display};">Gemeente: {gemeentenaam}</div>
         <div class="tooltip-row" style="display:{buurt_row_display};">Buurt: {buurtnaam}</div>
         {geo_extra_rows}
