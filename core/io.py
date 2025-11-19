@@ -20,8 +20,6 @@ from .config import (
     ENERGIEARMOEDE_PATH,
     KOOPWONINGEN_PATH,
     WOONCORPORATIE_PATH,
-    SPOORDEEL_PATH,
-    WATERDEEL_PATH,
     GJ_COMMON_PROPS,
 )
 
@@ -237,7 +235,7 @@ def preload_geo_layers(ttl=3600):
     """
     Laadt alle geojson-lagen zoals in de monolith gedaan werd, met identieke keep_props.
     Retourneert dict met keys:
-      - energiearmoede, koopwoningen, corporatie, spoordeel, water (optioneel)
+      - energiearmoede, koopwoningen, corporatie
     """
     gj_energiearmoede = load_geojson(
         ENERGIEARMOEDE_PATH,
@@ -254,21 +252,11 @@ def preload_geo_layers(ttl=3600):
         keep_props=[LAYER_CFG["wooncorporatie"]["prop_name"], *GJ_COMMON_PROPS],
         coord_precision=3,
     )
-    gj_spoordeel = load_geojson(
-        SPOORDEEL_PATH,
-        keep_props=[],  # lijnen: geen extra props nodig
-        coord_precision=3,
-    )
-    gj_water = None
-    if WATERDEEL_PATH:
-        gj_water = load_geojson(WATERDEEL_PATH, keep_props=[], coord_precision=3)
 
     return {
         "energiearmoede": gj_energiearmoede,
         "koopwoningen": gj_koopwoningen,
         "corporatie": gj_corporatie,
-        "spoordeel": gj_spoordeel,
-        "water": gj_water,
     }
 
 

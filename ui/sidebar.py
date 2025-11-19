@@ -60,6 +60,40 @@ def _legend_theme_colors(dark_mode: bool) -> dict[str, str]:
         "muted": "#4b5563",
     }
 
+
+def _warmtenet_legend_items(
+    meta: dict | None,
+    woonplaatsen: list[str],
+    allowed_keys: list[str] | None = None,
+    allowed_types: list[str] | None = None,
+) -> list[tuple[list[int], str, str]]:
+    """Selecteer legenda-items voor warmtenet op basis van huidige woonplaatsen."""
+    if not meta:
+        return []
+    color_map = meta.get("color_map") or {}
+    label_meta = meta.get("labels") or {}
+    allowed = {str(k).strip() for k in allowed_keys} if allowed_keys else None
+    type_by_key = meta.get("type_by_key") or {}
+    type_filter = {str(t).strip().lower() for t in allowed_types} if allowed_types else None
+    wp_filter = {str(w).strip().lower() for w in woonplaatsen} if woonplaatsen else None
+    items: list[tuple[list[int], str, str]] = []
+    for key in sorted(label_meta.keys()):
+        info = label_meta.get(key) or {}
+        wp_norm = str(info.get("woonplaats_norm") or "").strip().lower()
+        if wp_filter and wp_norm and wp_norm not in wp_filter:
+            continue
+        if allowed and key not in allowed:
+            continue
+        if type_filter:
+            tb = str(type_by_key.get(key) or "").strip().lower()
+            if tb not in type_filter:
+                continue
+        color = color_map.get(key)
+        label = info.get("label") or key
+        if color:
+            items.append((color, label, key))
+    return items
+
 # ---------------------------
 # Kleine helpers (RAM-zuinig)
 # ---------------------------
@@ -117,50 +151,6 @@ def _render_big_legend(current_threshold: int, *, dark_mode: bool):
     st.markdown(legend_html, unsafe_allow_html=True)
 
 
-def _render_bodem_legend(show_spoor: bool, show_water: bool, *, dark_mode: bool):
-    """Toon de legenda voor spoor- en waterlagen wanneer deze actief zijn."""
-    from core.utils import _spoor_rgb_from_cfg
-    r_s, g_s, b_s = _spoor_rgb_from_cfg(st.session_state.LAYER_CFG)
-    wc = st.session_state.LAYER_CFG["waterdeel"]["palette"]
-    r_w, g_w, b_w = int(wc[0]), int(wc[1]), int(wc[2])
- 
-    big_class = "ea-legend-wide" if show_water else "ea-legend"
-    rows_html = ""
-    if show_spoor:
-        rows_html += f'<div class="ea-row"><span class="ea-line" style="background:rgba({r_s},{g_s},{b_s},1);"></span> Spoor</div>'
-    if show_water:
-        rows_html += f'<div class="ea-row"><span class="ea-box" style="background:rgba({r_w},{g_w},{b_w},0.75); border:1px solid rgba({r_w},{g_w},{b_w},1);"></span> Water (polygoon)</div>'
- 
-    if not rows_html:
-        return
- 
-    colors = _legend_theme_colors(dark_mode)
-    bg = colors["bg"]
-    border = colors["border"]
-    text = colors["text"]
-    muted = colors["muted"]
-    html = f"""
-<style>
-    .ea-legend, .ea-legend-wide {{
-        background:{bg}; border:1px solid {border}; border-radius:12px;
-        padding:10px; font-family:Arial; font-size:12px; margin-bottom:20px;
-        box-shadow: 0 1px 0 rgba(0,0,0,0.03); color:{text};
-    }}
-    .ea-legend-wide {{ padding:14px 16px; font-size:13px; border-width: 1.5px; }}
-    .ea-row {{ display:flex; align-items:center; margin:6px 0; }}
-    .ea-line {{ width:30px; height:3px; display:inline-block; margin-right:8px; border-radius:2px; }}
-    .ea-box  {{ width:16px; height:12px; display:inline-block; margin-right:8px; border-radius:3px; }}
-    .ea-title {{ font-weight:700; margin-bottom:6px; color:{text}; }}
-    .ea-row {{ color:{text}; }}
-</style>
-<div class="{big_class}">
-<div class="ea-title">Bodemlagen</div>
-      {rows_html}
-</div>
-    """
-    st.markdown(html, unsafe_allow_html=True)
-
-
 # ---------------------------
 # Hoofdfunctie
 # ---------------------------
@@ -190,7 +180,11 @@ def _is_dark_color(color: str | None) -> bool:
     return brightness < 0.5
 
 
-def build_sidebar(df_in: pd.DataFrame, potential_meta: dict | None = None) -> Tuple[pd.DataFrame, Dict[str, Any]]:
+def build_sidebar(
+    df_in: pd.DataFrame,
+    potential_meta: dict | None = None,
+    warmtenet_meta: dict | None = None,
+) -> Tuple[pd.DataFrame, Dict[str, Any]]:
     """
     Bouwt de volledige sidebar en retourneert:
       - df (gefilterd)
@@ -346,6 +340,108 @@ def build_sidebar(df_in: pd.DataFrame, potential_meta: dict | None = None) -> Tu
             else:
                 ui["extra_opacity"] = st.session_state.setdefault("extra_opacity", 0.55)
 
+            # Model
+            st.subheader("Model")
+            default_warmtenet_opacity = (warmtenet_meta or {}).get("default_opacity", 0.85)
+            show_warmtenet = st.toggle(
+                "Warmtebron laag",
+                value=False,
+                key=LAYER_CFG["warmtenet_model"]["toggle_key"],
+            )
+            ui["show_warmtenet_model"] = show_warmtenet
+            if show_warmtenet:
+                model_wp_options = warmtenet_meta.get("woonplaatsen", []) if warmtenet_meta else []
+                prev_model_wp = [w for w in st.session_state.get("warmtenet_wp_selectie", []) if w in model_wp_options]
+                base_default = [w for w in st.session_state.get("woonplaats_selectie", []) if w in model_wp_options]
+                default_model_wp = prev_model_wp or base_default or model_wp_options
+                model_wp_selectie = st.multiselect(
+                    "Filter warmtenet op woonplaats:",
+                    options=model_wp_options,
+                    default=default_model_wp,
+                )
+                st.session_state["warmtenet_wp_selectie"] = model_wp_selectie
+                ui["warmtenet_wp_selectie"] = model_wp_selectie
+
+                type_opts = warmtenet_meta.get("types", []) if warmtenet_meta else []
+                prev_type_sel = [t for t in st.session_state.get("warmtenet_type_selectie", []) if t in type_opts]
+                default_type_sel = prev_type_sel or type_opts
+                type_selectie = st.multiselect(
+                    "Filter op type bron:",
+                    options=type_opts,
+                    default=default_type_sel,
+                )
+                st.session_state["warmtenet_type_selectie"] = type_selectie
+                ui["warmtenet_type_selectie"] = type_selectie
+
+                legend_items_all = _warmtenet_legend_items(
+                    warmtenet_meta,
+                    model_wp_selectie,
+                    None,
+                    type_selectie,
+                )
+                filter_sig = (tuple(sorted(model_wp_selectie)), tuple(sorted(type_selectie)))
+                available_keys = [k for *_, k in legend_items_all]
+                # default: bewaar vorige selectie, anders alles
+                prev_sel = [k for k in st.session_state.get("warmtenet_selected_keys", []) if k in available_keys]
+                if st.session_state.get("_warmtenet_last_filter") != filter_sig:
+                    prev_sel = available_keys
+                if not prev_sel:
+                    prev_sel = available_keys
+                st.session_state["_warmtenet_last_filter"] = filter_sig
+                selected_keys = st.multiselect(
+                    "Kies bronnen om te tonen:",
+                    options=available_keys,
+                    format_func=lambda k: next((lbl for _, lbl, key in legend_items_all if key == k), k),
+                    default=prev_sel,
+                )
+                ui["warmtenet_selected_keys"] = selected_keys
+                st.session_state["warmtenet_selected_keys"] = selected_keys
+                ui["warmtenet_opacity"] = st.slider(
+                    "Transparantie warmtebron laag",
+                    min_value=0.1,
+                    max_value=1.0,
+                    value=float(st.session_state.get("warmtenet_opacity", default_warmtenet_opacity)),
+                    step=0.05,
+                    key="warmtenet_opacity",
+                )
+                legend_items = _warmtenet_legend_items(
+                    warmtenet_meta,
+                    model_wp_selectie,
+                    selected_keys,
+                    type_selectie,
+                )
+                if legend_items:
+                    wp_by_key = (warmtenet_meta or {}).get("wp_by_key", {})
+                    grouped_colors: list[list[int]] = []
+                    grouped_labels: list[str] = []
+                    seen_wp = []
+                    for color, label, key in legend_items:
+                        wp = wp_by_key.get(key, "")
+                        if wp and wp not in seen_wp:
+                            grouped_colors.append(None)
+                            grouped_labels.append(f"<strong>{wp}</strong>")
+                            seen_wp.append(wp)
+                        grouped_colors.append(color)
+                        grouped_labels.append(label)
+                    header_html = (
+                        "<span style='font-size:12px; display:block;'>"
+                        "<span style='color:#111;'>●</span> bronnen<br>"
+                        "<span style='color:#444;'>───</span> leidingen"
+                        "</span>"
+                    )
+                    render_mini_legend(
+                        f"{LAYER_CFG['warmtenet_model']['legend_title']}<br><span style='font-size:12px;'>{header_html}</span>",
+                        grouped_colors,
+                        grouped_labels,
+                        dark_mode=dark_mode,
+                        footer_html="",
+                    )
+                else:
+                    st.info("Geen warmtebronnen voor de huidige selectie.")
+            else:
+                ui["warmtenet_opacity"] = st.session_state.setdefault("warmtenet_opacity", default_warmtenet_opacity)
+                ui["warmtenet_selected_keys"] = st.session_state.setdefault("warmtenet_selected_keys", [])
+
             # Potentielagen
             st.subheader("Aquathermie potentielagen EXTRAQT")
             pot_meta = potential_meta or {}
@@ -415,18 +511,6 @@ def build_sidebar(df_in: pd.DataFrame, potential_meta: dict | None = None) -> Tu
                     )
             else:
                 ui["buurt_potentie_opacity"] = st.session_state.setdefault("buurt_potentie_opacity", default_buurt_opacity)
-
-            # Bodemlagen
-            st.subheader("Bodemlagen")
-            ui["show_spoorlaag"] = st.toggle("Spoorlaag", value=False, key=LAYER_CFG["spoordeel"]["toggle_key"])
-            if ui["show_spoorlaag"]:
-                ui["spoor_opacity"] = st.slider("Transparantie spoorlaag", 0.1, 1.0, 0.5, key="spoor_opacity")
-
-            ui["show_waterlaag"] = st.toggle("Waterlaag", value=False, key=LAYER_CFG["waterdeel"]["toggle_key"])
-            if ui["show_waterlaag"]:
-                ui["water_opacity"] = st.slider("Transparantie waterlaag", 0.1, 1.0, 0.6, key="water_opacity")
-
-            _render_bodem_legend(ui["show_spoorlaag"], ui["show_waterlaag"], dark_mode=dark_mode)
 
         # ---------------- Filters ----------------
         with st.expander("Filters", expanded=False):
