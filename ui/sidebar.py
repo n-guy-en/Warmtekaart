@@ -140,7 +140,7 @@ def _render_big_legend(current_threshold: int, *, dark_mode: bool):
         </style>
         <div class="legend">
             <div class="legend-title">
-                Gemiddelde Energieverbruik<br>(woon en utiliteit oppervlakte)
+                Gemiddelde gasverbruik<br>(woon en utiliteit oppervlakte)
             </div>
             <div><span class="color-box" style="background-color: #4575b4;"></span> &lt; 10,0 kWh/m²</div>
             <div><span class="color-box" style="background-color: #fee090;"></span> 10,0 - 50,0 kWh/m²</div>
@@ -257,7 +257,7 @@ def build_sidebar(
         # ---------------- Lagen ----------------
         with st.expander("Lagen", expanded=True):
             st.subheader("Warmtevraaglaag")
-            ui["show_main_layer"] = st.toggle("Energieverbruik", value=True, key="show_main_layer")
+            ui["show_main_layer"] = st.toggle("Gasverbruik", value=True, key="show_main_layer")
 
             current_threshold = st.session_state["grenswaarde_input"]
             _render_big_legend(current_threshold, dark_mode=dark_mode)
@@ -287,64 +287,12 @@ def build_sidebar(
                     "- **50,0 – grenswaarde** – hoge warmtevraag (rood)\n"
                     "- **> grenswaarde** – Aandachtsgebied (donkerpaars)\n\n"
                 )
-
-            # Woonlagen + mini-legenda's
-            st.subheader("Woonlagen")
-            show_energiearmoede = st.toggle("Energiearmoede", value=False, key=LAYER_CFG["energiearmoede"]["toggle_key"])
-            if show_energiearmoede:
-                c = LAYER_CFG["energiearmoede"]
-                colors = get_layer_colors(c)
-                labels = legend_labels_from_breaks(c["breaks"])
-                render_mini_legend(
-                    c["legend_title"],
-                    colors,
-                    labels,
-                    dark_mode=dark_mode,
-                    footer_html="Bron: DataFryslân (2022)",
-                )
-
-            show_koopwoningen = st.toggle("Koopwoningen", value=False, key=LAYER_CFG["koopwoningen"]["toggle_key"])
-            if show_koopwoningen:
-                c = LAYER_CFG["koopwoningen"]
-                colors = get_layer_colors(c)
-                labels_kw = legend_labels_from_breaks(c["breaks"])
-                render_mini_legend(
-                    c["legend_title"],
-                    colors,
-                    labels_kw,
-                    dark_mode=dark_mode,
-                    footer_html="Bron: CBS (2023)",
-                )
-
-            show_corporatie = st.toggle("Wooncorporatie", value=False, key=LAYER_CFG["wooncorporatie"]["toggle_key"])
-            if show_corporatie:
-                c = LAYER_CFG["wooncorporatie"]
-                colors = get_layer_colors(c)
-                labels_wc = legend_labels_from_breaks(c["breaks"])
-                render_mini_legend(
-                    c["legend_title"],
-                    colors,
-                    labels_wc,
-                    dark_mode=dark_mode,
-                    footer_html="Bron: CBS (2023)",
-                )
-
-            if show_energiearmoede or show_koopwoningen or show_corporatie:
-                ui["extra_opacity"] = st.slider(
-                    "Transparantie woonlagen",
-                    min_value=0.1,
-                    max_value=1.0,
-                    value=st.session_state.get("extra_opacity", 0.55),
-                    key="extra_opacity"
-                )
-            else:
-                ui["extra_opacity"] = st.session_state.setdefault("extra_opacity", 0.55)
-
+            
             # Model
-            st.subheader("Model")
+            st.subheader("Potentiële warmtenetten")
             default_warmtenet_opacity = (warmtenet_meta or {}).get("default_opacity", 0.85)
             show_warmtenet = st.toggle(
-                "Warmtebron laag",
+                "Warmtenetten",
                 value=False,
                 key=LAYER_CFG["warmtenet_model"]["toggle_key"],
             )
@@ -511,6 +459,58 @@ def build_sidebar(
                     )
             else:
                 ui["buurt_potentie_opacity"] = st.session_state.setdefault("buurt_potentie_opacity", default_buurt_opacity)
+
+            # Woonlagen + mini-legenda's
+            st.subheader("Woonlagen")
+            show_energiearmoede = st.toggle("Energiearmoede", value=False, key=LAYER_CFG["energiearmoede"]["toggle_key"])
+            if show_energiearmoede:
+                c = LAYER_CFG["energiearmoede"]
+                colors = get_layer_colors(c)
+                labels = legend_labels_from_breaks(c["breaks"])
+                render_mini_legend(
+                    c["legend_title"],
+                    colors,
+                    labels,
+                    dark_mode=dark_mode,
+                    footer_html="Bron: DataFryslân (2022)",
+                )
+
+            show_koopwoningen = st.toggle("Koopwoningen", value=False, key=LAYER_CFG["koopwoningen"]["toggle_key"])
+            if show_koopwoningen:
+                c = LAYER_CFG["koopwoningen"]
+                colors = get_layer_colors(c)
+                labels_kw = legend_labels_from_breaks(c["breaks"])
+                render_mini_legend(
+                    c["legend_title"],
+                    colors,
+                    labels_kw,
+                    dark_mode=dark_mode,
+                    footer_html="Bron: CBS (2023)",
+                )
+
+            show_corporatie = st.toggle("Wooncorporatie", value=False, key=LAYER_CFG["wooncorporatie"]["toggle_key"])
+            if show_corporatie:
+                c = LAYER_CFG["wooncorporatie"]
+                colors = get_layer_colors(c)
+                labels_wc = legend_labels_from_breaks(c["breaks"])
+                render_mini_legend(
+                    c["legend_title"],
+                    colors,
+                    labels_wc,
+                    dark_mode=dark_mode,
+                    footer_html="Bron: CBS (2023)",
+                )
+
+            if show_energiearmoede or show_koopwoningen or show_corporatie:
+                ui["extra_opacity"] = st.slider(
+                    "Transparantie woonlagen",
+                    min_value=0.1,
+                    max_value=1.0,
+                    value=st.session_state.get("extra_opacity", 0.55),
+                    key="extra_opacity"
+                )
+            else:
+                ui["extra_opacity"] = st.session_state.setdefault("extra_opacity", 0.55)
 
         # ---------------- Filters ----------------
         with st.expander("Filters", expanded=False):
@@ -787,11 +787,11 @@ def build_sidebar(
         with st.expander("Uitleg analyse", expanded=False):
             st.markdown("""\
 **Doel van de analyse**  
-De analyse laat zien waar een **collectieve warmtevoorziening** (zoals een buurtbron of warmtenet) kansrijk kan zijn. Dit gebeurt door te kijken hoeveel energie en gebouwen er binnen de directe omgeving van een mogelijke locatie liggen en of deze plek past binnen de capaciteit van een voorziening.
+De analyse laat zien waar een **collectieve warmtevoorziening** (zoals een buurtbron of warmtenet) kansrijk kan zijn. Dit gebeurt door te kijken hoeveel gasverbruik en gebouwen er binnen de directe omgeving van een mogelijke locatie liggen en of deze plek past binnen de capaciteit van een voorziening.
 
 **Werkwijze in hoofdlijnen**  
 1. Rondom een centrale plek wordt gekeken naar omliggende buurten in de vorm van zeshoekige vakjes (hexagonen). De straal bepaalt hoe groot de omgeving is die wordt meegenomen.  
-2. Per locatie wordt berekend hoeveel energie en hoeveel gebouwen in die omgeving aanwezig zijn. Daarbij geldt een maximum: een voorziening kan maar een bepaalde hoeveelheid warmte leveren en een maximum aantal gebouwen aansluiten.  
+2. Per locatie wordt berekend hoeveel gasverbruik en hoeveel gebouwen in die omgeving aanwezig zijn. Daarbij geldt een maximum: een voorziening kan maar een bepaalde hoeveelheid warmte leveren en een maximum aantal gebouwen aansluiten.  
 3. Alle locaties worden gerangschikt op de hoeveelheid warmte die daadwerkelijk kan worden aangesloten.  
 4. Vervolgens worden de beste locaties geselecteerd, met een minimale onderlinge afstand zodat voorzieningen niet te dicht bij elkaar liggen.  
 
@@ -800,7 +800,7 @@ De analyse laat zien waar een **collectieve warmtevoorziening** (zoals een buurt
 - **Minimale afstand tussen voorzieningen:** de onderlinge ruimte die wordt aangehouden, zodat meerdere voorzieningen niet op (bijna) dezelfde plek terechtkomen.  
 
 **Verschil tussen deze twee**  
-- De *k-ring* bepaalt hoe ver er wordt gekeken om te berekenen hoeveel gebouwen en energie bij één locatie horen (de invloedsstraal van een plek).  
+- De *k-ring* bepaalt hoe ver je kijkt om het totale gasverbruik en aantal gebouwen rond één plek te bepalen (de invloedsstraal van een plek).  
 - De *minimale afstand* zorgt ervoor dat twee geselecteerde voorzieningen niet te dicht naast elkaar komen te liggen (de spreiding tussen verschillende plekken).  
 
 **K-ring in de praktijk (k = 1 t/m 5)**  
