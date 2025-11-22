@@ -253,15 +253,15 @@ def _build_warmtenet_meta(gjson: dict | None) -> dict:
         return base_meta
 
     def _distinct_colors(n: int, alpha: int) -> list[list[int]]:
-        # verdeel tinten via golden ratio en varieer lichtheid om vergelijkbare tinten te voorkomen
+        # verdeel tinten via golden ratio pm vergelijkbare tinten te voorkomen
         import colorsys
         colors = []
         if n <= 0:
             return colors
         for i in range(n):
             hue = (i * 0.618033988749895) % 1.0
-            sat = 0.65
-            val = 0.90 - (0.12 * ((i % 3) / 3))  # kleine variatie in helderheid
+            sat = 0.58
+            val = 0.78 - (0.10 * ((i % 3) / 3))  # kleine variatie in helderheid
             r, g, b = colorsys.hsv_to_rgb(hue, sat, val)
             colors.append([int(r * 255), int(g * 255), int(b * 255), alpha])
         return colors
