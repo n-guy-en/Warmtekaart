@@ -373,8 +373,9 @@ def build_sidebar(
                         grouped_labels.append(label)
                     header_html = (
                         "<span style='font-size:12px; display:block;'>"
-                        "<span style='color:#111;'>●</span> bronnen<br>"
-                        "<span style='color:#444;'>───</span> leidingen"
+                        "<span style='color:#111;'>&#9679;</span> bron<br>"
+                        "<span style='color:#111;'>&#9675;</span> object<br>"
+                        "<span style='color:#444;'>───</span> leiding"
                         "</span>"
                     )
                     render_mini_legend(

@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from typing import Iterable, List, Dict, Any, Union
+import math
 
 import pydeck as pdk
 import streamlit as st
@@ -535,17 +536,50 @@ def create_extra_layers(
 # ------------------------------------------------------------
 def _warmtenet_extra_rows(props: dict) -> str:
     """Stel tooltip-rijen samen voor de warmtenetlaag."""
-    def _fmt(val, decimals: int = 1):
+    def _to_float(val):
         try:
-            return format_dutch_number(float(val), decimals)
-        except Exception:
+            num = float(val)
+        except (TypeError, ValueError):
             return None
+        if math.isnan(num) or math.isinf(num):
+            return None
+        return num
+
+    def _fmt(val, decimals: int = 1):
+        num = _to_float(val)
+        if num is None:
+            return None
+        return format_dutch_number(num, decimals)
+
+    def _add_row(label: str, value, *, decimals: int = 1, suffix: str = "", prefix: str = ""):
+        fmt_val = _fmt(value, decimals=decimals)
+        suffix_txt = f" {suffix}" if suffix else ""
+        display = f"{prefix}{fmt_val}{suffix_txt}" if fmt_val is not None else "-"
+        rows.append(f"<div class='tooltip-row'>{label}: {display}</div>")
+
+    def _add_currency(label: str, value):
+        fmt_val = _fmt(value, decimals=0)
+        display = f"€ {fmt_val}" if fmt_val is not None else "-"
+        rows.append(f"<div class='tooltip-row'>{label}: {display}</div>")
 
     rows = []
+    layer_raw = str(props.get("layer") or "").strip().lower()
+    geom_type = str(props.get("_geometry_type") or "").strip().lower()  # optional helper
+    layer_type = layer_raw
+    if layer_type not in {"bron", "object", "leiding"}:
+        if geom_type == "linestring":
+            layer_type = "leiding"
+        elif props.get("bron_mwh_per_jaar") is not None or props.get("ingezet_mwh_per_jaar") is not None:
+            layer_type = "bron"
+        elif props.get("vraag_mwh_per_jaar") is not None:
+            layer_type = "object"
+    layer_label = {"bron": "Bron", "object": "Object", "leiding": "Leiding"}.get(layer_type)
     woonplaats = props.get("woonplaats")
     bron_id = props.get("bron_id") or props.get("bron_key")
     gegevensbron = props.get("type_bron") or props.get("gegevensbron")
 
+    if layer_label:
+        rows.append(f"<div class='tooltip-row'>Type: {layer_label}</div>")
     if woonplaats:
         rows.append(f"<div class='tooltip-row'>Woonplaats: {woonplaats}</div>")
     if bron_id:
@@ -553,15 +587,20 @@ def _warmtenet_extra_rows(props: dict) -> str:
     if gegevensbron:
         rows.append(f"<div class='tooltip-row'>Gegevensbron: {gegevensbron}</div>")
 
-    bron_mwh = _fmt(props.get("bron_mwh_per_jaar"), decimals=0)
-    if bron_mwh:
-        rows.append(f"<div class='tooltip-row'>MWh per jaar: {bron_mwh}</div>")
-    vraag_mwh = _fmt(props.get("vraag_mwh_per_jaar"), decimals=1)
-    if vraag_mwh:
-        rows.append(f"<div class='tooltip-row'>Vraag MWh per jaar: {vraag_mwh}</div>")
-    pad_len = _fmt(props.get("padlengte_m") or props.get("geometrie_lengte_m"), decimals=0)
-    if pad_len:
-        rows.append(f"<div class='tooltip-row'>Padlengte (m): {pad_len}</div>")
+    if layer_type == "bron":
+        _add_row("Beschikbare warmte (MWh/jaar)", props.get("bron_mwh_per_jaar"), decimals=0)
+        _add_row("Ingezette warmte (MWh/jaar)", props.get("ingezet_mwh_per_jaar"), decimals=0)
+        _add_row("Benutting percentage", props.get("benutting_pct"), decimals=1, suffix="%")
+        _add_row("Aangesloten objecten", props.get("aangesloten_objecten"), decimals=0)
+        _add_currency("Kosten bron", props.get("kosten_bron_euro"))
+        _add_currency("Kosten aansluitingen", props.get("kosten_aansluitingen_euro"))
+        _add_currency("Totale kosten bron", props.get("bron_totale_kosten_euro"))
+    elif layer_type == "object":
+        _add_row("Warmtevraag (MWh/jaar)", props.get("vraag_mwh_per_jaar"), decimals=1)
+        _add_currency("Kosten aansluiting", props.get("kosten_aansluiting_euro"))
+        _add_row("Afstand object tot bron (m)", props.get("afstand_pad_m"), decimals=0)
+    else:
+        _add_row("Warmtevraag (MWh/jaar)", props.get("vraag_mwh_per_jaar"), decimals=1)
 
     return "".join(rows)
 
@@ -597,6 +636,18 @@ def create_warmtenet_layers(
     if not gjson or not isinstance(gjson, dict):
         return []
 
+    def _line_hash(geom: dict) -> tuple:
+        """Maak een hashbare representatie van een LineString (coördinaten afgerond)."""
+        coords = geom.get("coordinates") or []
+        hashed = []
+        for pt in coords:
+            if isinstance(pt, (list, tuple)) and len(pt) >= 2:
+                try:
+                    hashed.append((round(float(pt[0]), 6), round(float(pt[1]), 6)))
+                except Exception:
+                    continue
+        return tuple(hashed)
+
     allowed = {str(k).strip() for k in allowed_keys} if allowed_keys else None
     allowed_types_set = {str(t).strip().lower() for t in allowed_types} if allowed_types else None
     wp_filter = {str(w).strip().lower() for w in woonplaatsen} if woonplaatsen else None
@@ -605,6 +656,7 @@ def create_warmtenet_layers(
 
     line_feats = []
     point_records = []
+    filtered_feats: list[tuple[dict, dict, dict]] = []
 
     for feat in gjson.get("features", []):
         if not isinstance(feat, dict):
@@ -624,17 +676,51 @@ def create_warmtenet_layers(
         prepared_props = _prepare_warmtenet_props(props, color=color, layer_label=layer_label)
 
         geom = feat.get("geometry") or {}
+        filtered_feats.append((prepared_props, geom, feat))
+
+    # Bepaal overlap-telling voor leidingen (zelfde traject -> dikkere lijn)
+    line_counts: dict[tuple, int] = {}
+    for prepared_props, geom, _ in filtered_feats:
+        if geom.get("type") != "LineString":
+            continue
+        key = _line_hash(geom)
+        line_counts[key] = line_counts.get(key, 0) + 1
+
+    for prepared_props, geom, _ in filtered_feats:
         geom_type = geom.get("type")
+        layer_type = str(prepared_props.get("layer") or "").strip().lower()
+        prepared_props["_geometry_type"] = str(geom_type or "").strip()
+        point_radius = 12 if layer_type == "bron" else 6
+        point_line_width = 3.0 if layer_type == "bron" else 2.2  # dikkere rand voor zichtbaarheid
+        base_color = prepared_props.get("color", default_color)
+        if layer_type == "object":
+            fill_color = [255, 255, 255, 235]  # wit binnenvlak
+            line_color = base_color           # gekleurde rand
+        else:
+            fill_color = base_color
+            line_color = [25, 25, 25, 210]    # donkere rand voor contrast
         if geom_type == "Point":
             coords = geom.get("coordinates") or [None, None]
-            point_records.append({
+            record = {
                 "position": coords,
+                "point_radius": point_radius,
+                "point_line_width": point_line_width,
+                "fill_color": fill_color,
+                "line_color": line_color,
                 **prepared_props,
-            })
+            }
+            point_records.append(record)
         else:
+            key = _line_hash(geom)
+            overlap = line_counts.get(key, 1)
+            # dikker bij overlap, met max om extreme breedte te voorkomen
+            width = min(2.0 + (overlap - 1) * 1.4, 8.0)
+            props_with_width = dict(prepared_props)
+            props_with_width["line_overlap"] = overlap
+            props_with_width["line_width"] = width
             line_feats.append({
                 "type": "Feature",
-                "properties": prepared_props,
+                "properties": props_with_width,
                 "geometry": geom,
             })
 
@@ -646,8 +732,8 @@ def create_warmtenet_layers(
             pickable=True,
             stroked=True,
             filled=False,
-            get_line_color="properties.color",
-            get_line_width=3,
+            get_line_color=[0, 0, 0, 220],
+            get_line_width="properties.line_width",
             lineWidthMinPixels=2,
             opacity=float(opacity),
         ))
@@ -658,10 +744,13 @@ def create_warmtenet_layers(
             point_records,
             pickable=True,
             get_position="position",
-            get_fill_color="color",
-            get_line_color=[25, 25, 25, 220],
-            radius_min_pixels=5,
-            radius_max_pixels=14,
+            get_fill_color="fill_color",
+            get_line_color="line_color",
+            get_line_width="point_line_width",
+            get_radius="point_radius",
+            radius_units="pixels",
+            radius_min_pixels=4,
+            radius_max_pixels=18,
             stroked=True,
             opacity=float(opacity),
         ))
