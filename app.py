@@ -343,7 +343,7 @@ if "app_initialized" not in st.session_state:
 
 # ========== Streamlit pagina setup ==========
 st.set_page_config(page_title="Friese Warmtevraagkaart", layout="wide")
-st.markdown('<h1 style="font-size: 35px;">Friese Warmtevraagkaart (Heat Demand)</h1>', unsafe_allow_html=True)
+st.markdown('<h1 style="font-size: 35px;">Friese potentiekaart</h1>', unsafe_allow_html=True)
 st.markdown(
     """
     <p style="font-size: 16px; margin-top: -10px;">
