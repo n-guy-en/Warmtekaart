@@ -29,7 +29,7 @@ from core.utils import (
     format_dutch_number,
     get_dynamic_line_width,
     get_dynamic_resolution,
-    get_color,
+    get_heat_color,
     build_deck_tooltip,
     get_color_palette,
     extract_numeric_values,
@@ -500,6 +500,7 @@ def _build_filters_snapshot(ui: dict) -> dict:
         "hide_basemap":        bool(ui.get("hide_basemap", False)),
         "show_main_layer":     bool(ui.get("show_main_layer", True)),
         "show_indicative_layer": bool(ui.get("show_indicative_layer", True)),
+        "heat_unit":           str(ui.get("heat_unit", "kWh/m²")),
         "warmte_hex_opacity":  _as_float(ui.get("warmte_hex_opacity", st.session_state.get("warmte_hex_opacity", 0.6))),
         "threshold":           _as_float(ui.get("threshold", 50.0)),
         "gemeente":            _as_sorted_list(ui.get("gemeente_selectie")),
@@ -993,7 +994,10 @@ def _build_site_records(
 if st.session_state.show_map:
     res = int(ui["resolution"])
     zoom_level = int(ui.get("zoom_level", 0))
-    threshold = float(ui["threshold"])
+    heat_unit = str(ui.get("heat_unit", "kWh/m²"))
+    threshold_kwh = float(ui.get("threshold", 50.0))
+    threshold_display = float(ui.get("threshold_display", threshold_kwh if heat_unit != "MWh/ha" else threshold_kwh * 10.0))
+    value_col = "MWh_per_ha" if heat_unit == "MWh/ha" else "kWh_per_m2"
 
     df_filtered, df_extra_info, df_view_source = _build_map_dataframe(df_filtered_input, res)
 
@@ -1046,15 +1050,16 @@ if st.session_state.show_map:
             df_filtered[col] = pd.to_numeric(df_filtered[col], errors="coerce").fillna(0).astype("int32")
 
     # Kleuren en 3D hoogte
-    df_filtered["color"] = df_filtered["kWh_per_m2"].apply(get_color)
-    MAX_HEIGHT = max(df_filtered["kWh_per_m2"].max(), 1)
-    threshold = float(ui["threshold"])
+    df_filtered["color"] = df_filtered[value_col].apply(lambda v: get_heat_color(v, heat_unit))
+    value_series = df_filtered[value_col]
+    base_min = 25.0 if heat_unit == "MWh/ha" else 10.0
+    max_height_ref = max(value_series.max(), threshold_display, base_min + 1.0)
     df_filtered["scaled_elevation"] = (
-        (df_filtered["kWh_per_m2"] - 10)
-        / max((MAX_HEIGHT - 10), 1)
-        * MAX_HEIGHT
+        (value_series - base_min)
+        / max((max_height_ref - base_min), 1)
+        * max_height_ref
     )
-    df_filtered["scaled_elevation"] = df_filtered["scaled_elevation"].clip(lower=0, upper=threshold)
+    df_filtered["scaled_elevation"] = df_filtered["scaled_elevation"].clip(lower=0, upper=threshold_display)
 
     # merge extra tooltip info
     df_filtered = df_filtered.merge(df_extra_info, on="h3_index", how="left")
@@ -1329,7 +1334,8 @@ if st.session_state.show_map:
         "buurt_row_display",
     ]
     df_hex_view = df_hex_view.loc[:, cols_for_hex]
-    indic_mask = df_filtered["kWh_per_m2"] > threshold
+    indic_value_col = "MWh_per_ha" if heat_unit == "MWh/ha" else "kWh_per_m2"
+    indic_mask = df_filtered[indic_value_col] > threshold_display
     df_indicative = df_hex_view.loc[indic_mask, :]
     _log_ram("before_pydeck_layers")
     warmte_opacity = float(ui.get("warmte_hex_opacity", st.session_state.get("warmte_hex_opacity", 0.6)))
@@ -1464,7 +1470,7 @@ if st.session_state.show_map:
 
     # ========== Tabellen ==========
     with tables_container:
-        render_tabs(df_filtered, threshold, ui["show_sites_layer"], st.session_state.get("sites_costed"))
+        render_tabs(df_filtered, threshold_kwh, ui["show_sites_layer"], st.session_state.get("sites_costed"))
     st.session_state["_map_changed"] = False
 
 else:

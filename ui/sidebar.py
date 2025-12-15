@@ -19,6 +19,10 @@ from core.utils import (
     legend_labels_from_breaks,
     render_mini_legend,
     text_input_int,
+    parse_dutch_int,
+    format_numeric_range_labels,
+    MWH_HA_BREAKS,
+    MWH_HA_COLORS,
 )
 
 # ---------------------------
@@ -119,7 +123,17 @@ def _fillna_categorical(df_in: pd.DataFrame, col: str, value: str = "Onbekend") 
     return df_in
 
 
-def _render_big_legend(current_threshold: int, *, dark_mode: bool):
+def _rgba_to_css(color: list[int]) -> str:
+    """Zet [r,g,b,a] om naar rgba() string met alpha 0-1."""
+    try:
+        r, g, b, a = color
+        alpha = round(float(a) / 255.0, 3)
+        return f"rgba({int(r)},{int(g)},{int(b)},{alpha})"
+    except Exception:
+        return "rgba(220,220,220,0.6)"
+
+
+def _render_big_legend(current_threshold_display: float, heat_unit: str, *, dark_mode: bool):
     """Render de hoofdlegenda voor de warmtevraaglaag."""
     colors = _legend_theme_colors(dark_mode)
     bg = colors["bg"]
@@ -127,6 +141,38 @@ def _render_big_legend(current_threshold: int, *, dark_mode: bool):
     text = colors["text"]
     muted = colors["muted"]
     pot_color = "#B14470" if dark_mode else "#3A1B2F"
+    unit_norm = (heat_unit or "").strip().lower()
+
+    if unit_norm in ("mwh/ha", "mwh_per_ha", "mwh_ha"):
+        fmt = lambda v: format_dutch_number(v, 0)
+        start = 25
+        labels = [
+            f"{fmt(start)} – {fmt(MWH_HA_BREAKS[0])} MWh/ha",
+            f"{fmt(MWH_HA_BREAKS[0])} – {fmt(MWH_HA_BREAKS[1])} MWh/ha",
+            f"{fmt(MWH_HA_BREAKS[1])} – {fmt(MWH_HA_BREAKS[2])} MWh/ha",
+            f"{fmt(MWH_HA_BREAKS[2])} – {fmt(MWH_HA_BREAKS[3])} MWh/ha",
+            f"{fmt(MWH_HA_BREAKS[3])} – {fmt(MWH_HA_BREAKS[4])} MWh/ha",
+            f"> {fmt(MWH_HA_BREAKS[4])} MWh/ha",
+        ]
+        legend_rows = [(_rgba_to_css(color), label) for color, label in zip(MWH_HA_COLORS, labels)]
+        pot_label_value = current_threshold_display
+        pot_label = f"Potentie grenswaarde: {format_dutch_number(pot_label_value, 0)} MWh/ha"
+        title = "Warmtevraag (MWh/ha)"
+    else:
+        legend_rows = [
+            ("#4575b4", "< 10,0 kWh/m²"),
+            ("#fee090", "10,0 - 50,0 kWh/m²"),
+            ("#d73027", f"50,0 - {format_dutch_number(current_threshold_display, 0)} kWh/m²"),
+        ]
+        pot_label_value = current_threshold_display
+        pot_label = f"Potentie grenswaarde: {format_dutch_number(pot_label_value, 0)} kWh/m²"
+        title = "Gemiddelde gasverbruik (kWh/m²)"
+
+    legend_html_rows = "".join(
+        f"<div><span class='color-box' style='background-color: {color};'></span> {label}</div>"
+        for color, label in legend_rows
+    )
+
     legend_html = f"""
         <style>
             .legend {{
@@ -139,13 +185,9 @@ def _render_big_legend(current_threshold: int, *, dark_mode: bool):
             .legend-text-muted {{ color: {muted}; }}
         </style>
         <div class="legend">
-            <div class="legend-title">
-                Gemiddelde gasverbruik<br>(woon en utiliteit oppervlakte)
-            </div>
-            <div><span class="color-box" style="background-color: #4575b4;"></span> &lt; 10,0 kWh/m²</div>
-            <div><span class="color-box" style="background-color: #fee090;"></span> 10,0 - 50,0 kWh/m²</div>
-            <div><span class="color-box" style="background-color: #d73027;"></span> 50,0 - {current_threshold} (grenswaarde) kWh/m²</div>
-            <div><span class="color-box" style="background-color: {pot_color};"></span> Potentie grenswaarde: {current_threshold} kWh/m²</div>
+            <div class="legend-title">{title}</div>
+            {legend_html_rows}
+            <div><span class="color-box" style="background-color: {pot_color};"></span> {pot_label}</div>
         </div>
     """
     st.markdown(legend_html, unsafe_allow_html=True)
@@ -190,7 +232,11 @@ def build_sidebar(
       - df (gefilterd)
       - ui (dict met alle gekozen waarden)
     """
-    st.session_state.setdefault("grenswaarde_input", 100)
+    # defaults + migratie van bestaande grenswaarde
+    st.session_state.setdefault("heat_unit", "MWh/ha")
+    if "grenswaarde_input" in st.session_state and "grenswaarde_input_kwh" not in st.session_state:
+        st.session_state["grenswaarde_input_kwh"] = st.session_state.get("grenswaarde_input", 100)
+    st.session_state.setdefault("grenswaarde_input", 100)  # backward compat
     st.session_state.setdefault("participatie", 80)
     st.session_state.setdefault("LAYER_CFG", LAYER_CFG)
     st.session_state.setdefault("BASEMAP_CFG", BASEMAP_CFG)
@@ -259,8 +305,44 @@ def build_sidebar(
             st.subheader("Warmtevraaglaag")
             ui["show_main_layer"] = st.toggle("Gasverbruik", value=True, key="show_main_layer")
 
-            current_threshold = st.session_state["grenswaarde_input"]
-            _render_big_legend(current_threshold, dark_mode=dark_mode)
+            heat_unit_default = st.session_state.get("heat_unit", "MWh/ha")
+            heat_unit = st.radio(
+                "Eenheid warmtevraag",
+                options=["MWh/ha", "kWh/m²"],
+                index=0 if heat_unit_default == "MWh/ha" else 1,
+                horizontal=True,
+                key="heat_unit",
+                help="Kies of de kaart kleurt op warmtevraagdichtheid (MWh/ha) of gemiddeld verbruik (kWh/m²).",
+            )
+            ui["heat_unit"] = heat_unit
+
+            if heat_unit == "MWh/ha":
+                default_mwhha = int(float(st.session_state.get("grenswaarde_input_mwhha", 5000)))
+                display_val = format_dutch_number(default_mwhha, 0)
+                threshold_str = st.text_input(
+                    "Stel de minimale grenswaarde (threshold) in per MWh/ha:",
+                    value=display_val,
+                    key="grenswaarde_input_mwhha_str",
+                )
+                threshold_display = parse_dutch_int(threshold_str or "", fallback=default_mwhha)
+                st.session_state["grenswaarde_input_mwhha"] = threshold_display
+                threshold_kwh = float(threshold_display) / 10.0
+            else:
+                default_kwh = int(float(st.session_state.get("grenswaarde_input_kwh", 100)))
+                display_val = format_dutch_number(default_kwh, 0)
+                threshold_str = st.text_input(
+                    "Stel de minimale grenswaarde (threshold) in per kWh/m²:",
+                    value=display_val,
+                    key="grenswaarde_input_kwh_str",
+                )
+                threshold_display = parse_dutch_int(threshold_str or "", fallback=default_kwh)
+                st.session_state["grenswaarde_input_kwh"] = threshold_display
+                threshold_kwh = float(threshold_display)
+
+            ui["threshold"] = threshold_kwh
+            ui["threshold_display"] = threshold_display
+
+            _render_big_legend(threshold_display, heat_unit, dark_mode=dark_mode)
 
             ui["show_indicative_layer"] = st.toggle("Aandachtsgebieden tonen", value=True, key="show_indicative_layer")
             ui["warmte_hex_opacity"] = st.slider(
@@ -272,20 +354,11 @@ def build_sidebar(
                 key="warmte_hex_opacity",
                 help="0 = transparant (onderliggende lagen zichtbaar) | 1 = dekkend"
             )
-            ui["threshold"] = st.number_input(
-                "Stel de minimale grenswaarde (threshold) in per kWh/m²:",
-                min_value=0,
-                step=1,
-                key="grenswaarde_input"
-            )
             with st.expander("Wat doet de grenswaarde?"):
                 st.write(
-                    "*Pas de grenswaarde bovenin aan om te bepalen welk verbruik jij als grens van ‘extra aandacht’ ziet.* \n\n"
-                    "**Kleuren in de kaart laten zien:**\n"
-                    "- **< 10,0 kWh/m²** – lage warmtevraag (blauw)\n"
-                    "- **10,0 – 50,0 kWh/m²** – gemiddelde warmtevraag (geel)\n"
-                    "- **50,0 – grenswaarde** – hoge warmtevraag (rood)\n"
-                    "- **> grenswaarde** – Aandachtsgebied (donkerpaars)\n\n"
+                    "*Pas de grenswaarde bovenin aan om te bepalen welk verbruik jij als grens van ‘extra aandacht’ ziet.*\n\n"
+                    "De legenda en kaartkleuren passen mee met de gekozen eenheid. "
+                    "De grenswaarde wordt toegepast in dezelfde eenheid en wordt ook gebruikt voor de aandachtsgebieden."
                 )
             
             # Model

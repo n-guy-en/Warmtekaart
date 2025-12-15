@@ -310,6 +310,17 @@ colorbrewer_colors = [
     [215, 48, 39, 150]     # >=50 Rood
 ]
 
+# MWh/ha klassen (warmtevraagdichtheid) – 6 klassen, start bij ~25–100
+MWH_HA_BREAKS = [100, 500, 1000, 2000, 5000]
+MWH_HA_COLORS = [
+    [170, 205, 240, 235],  # ~25-100 lichtblauw
+    [90, 140, 200, 235],   # 100-500 blauw
+    [245, 205, 140, 235],  # 500-1000 geel/oranje licht
+    [240, 170, 90, 235],   # 1000-2000 oranje
+    [210, 100, 60, 235],   # 2000-5000 rood-oranje
+    [130, 50, 55, 235],    # >5000 donkerrood
+]
+
 def get_color(value):
     """
     Wanneer je dit aanpast de bins. Pas dan ook de legenda aan!
@@ -326,6 +337,18 @@ def get_color(value):
         if v < threshold:
             return colorbrewer_colors[i]
     return colorbrewer_colors[-1]
+
+
+def get_heat_color(value, unit: str):
+    """
+    Retourneer kleur voor kWh/m² of MWh/ha op basis van vaste breaks.
+    - unit == 'MWh/ha' => gebruik MWH_HA_BREAKS/MWH_HA_COLORS
+    - anders -> kWh/m² schaal (get_color)
+    """
+    unit_norm = (unit or "").strip().lower()
+    if unit_norm in ("mwh/ha", "mwh_per_ha", "mwh_ha"):
+        return _color_from_breaks(value, MWH_HA_BREAKS, MWH_HA_COLORS)
+    return get_color(value)
 
 
 # ============================================================
