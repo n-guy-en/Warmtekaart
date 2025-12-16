@@ -305,14 +305,23 @@ def build_sidebar(
             st.subheader("Warmtevraaglaag")
             ui["show_main_layer"] = st.toggle("Gasverbruik", value=True, key="show_main_layer")
 
-            heat_unit_default = st.session_state.get("heat_unit", "MWh/ha")
+            heat_unit_options = ["MWh/ha", "kWh/m²"]
+            heat_unit_labels = {
+                "MWh/ha": "MWh/ha (grondoppervlakte)",
+                "kWh/m²": "kWh/m² (gebruiksoppervlakte)",
+            }
+            heat_unit_default = st.session_state.get("heat_unit", heat_unit_options[0])
+            if heat_unit_default not in heat_unit_options:
+                heat_unit_default = heat_unit_options[0]
+                st.session_state["heat_unit"] = heat_unit_default
             heat_unit = st.radio(
                 "Eenheid warmtevraag",
-                options=["MWh/ha", "kWh/m²"],
-                index=0 if heat_unit_default == "MWh/ha" else 1,
+                options=heat_unit_options,
+                format_func=lambda v: heat_unit_labels.get(v, v),
+                index=heat_unit_options.index(heat_unit_default),
                 horizontal=True,
                 key="heat_unit",
-                help="Kies of de kaart kleurt op warmtevraagdichtheid (MWh/ha) of gemiddeld verbruik (kWh/m²).",
+                help="Kies of de kaart kleurt op warmtevraag per hectare grondoppervlakte (MWh/ha) of op gemiddeld verbruik per m² gebruiksoppervlakte (kWh/m²).",
             )
             ui["heat_unit"] = heat_unit
 
