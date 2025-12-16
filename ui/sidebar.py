@@ -157,7 +157,7 @@ def _render_big_legend(current_threshold_display: float, heat_unit: str, *, dark
         legend_rows = [(_rgba_to_css(color), label) for color, label in zip(MWH_HA_COLORS, labels)]
         pot_label_value = current_threshold_display
         pot_label = f"Potentie grenswaarde: {format_dutch_number(pot_label_value, 0)} MWh/ha"
-        title = "Warmtevraag (MWh/ha)"
+        title = "Gemiddelde warmtevraag (MWh/ha)"
     else:
         legend_rows = [
             ("#4575b4", "< 10,0 kWh/m²"),
@@ -166,7 +166,7 @@ def _render_big_legend(current_threshold_display: float, heat_unit: str, *, dark
         ]
         pot_label_value = current_threshold_display
         pot_label = f"Potentie grenswaarde: {format_dutch_number(pot_label_value, 0)} kWh/m²"
-        title = "Gemiddelde gasverbruik (kWh/m²)"
+        title = "Gemiddelde warmtevraag (kWh/m²)"
 
     legend_html_rows = "".join(
         f"<div><span class='color-box' style='background-color: {color};'></span> {label}</div>"
