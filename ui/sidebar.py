@@ -308,11 +308,11 @@ def build_sidebar(
             heat_unit_default = st.session_state.get("heat_unit", "MWh/ha")
             heat_unit = st.radio(
                 "Eenheid warmtevraag",
-                options=["MWh/ha", "kWh/m²"],
+                options=["MWh/ha (grondoppervlakte)", "kWh/m² (gebruiksoppervlakte)"],
                 index=0 if heat_unit_default == "MWh/ha" else 1,
                 horizontal=True,
                 key="heat_unit",
-                help="Kies of de kaart kleurt op warmtevraagdichtheid (MWh/ha) of gemiddeld verbruik (kWh/m²).",
+                help="Kies of de kaart kleurt op warmtevraag per hectare grondoppervlakte (MWh/ha) of op gemiddelde warmtevraag per m² gebruiksoppervlakte (kWh/m²).",
             )
             ui["heat_unit"] = heat_unit
 
