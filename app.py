@@ -177,6 +177,18 @@ def _format_kwh_value(value: float | None) -> str:
     return f"{format_dutch_number(value, 0)} kWh"
 
 
+def _format_mwh_value(value: float | None) -> str:
+    if value is None:
+        return "-"
+    try:
+        mwh_value = float(value) / 1000.0
+        if not math.isfinite(mwh_value):
+            return "-"
+    except (TypeError, ValueError):
+        return "-"
+    return f"{format_dutch_number(mwh_value, 0)} MWh"
+
+
 def _format_percent_value(value: float | None) -> str:
     if value is None:
         return "-"
@@ -210,12 +222,13 @@ def _build_water_potential_meta(gjson: dict) -> dict:
     breaks = compute_quantile_breaks(values, n_colors)
     if breaks and len(breaks) > n_colors - 1:
         breaks = breaks[: n_colors - 1]
-    legend_labels = format_numeric_range_labels(breaks, suffix=cfg.get("tooltip_unit", "kWh"), decimals=0)
+    display_breaks = [b / 1000.0 for b in breaks] if breaks else []
+    legend_labels = format_numeric_range_labels(display_breaks, suffix=cfg.get("tooltip_unit", "MWh"), decimals=0)
     return {
         "breaks": breaks,
         "colors": colors,
         "labels": legend_labels,
-        "value_formatter": lambda v: _format_kwh_value(v),
+        "value_formatter": lambda v: _format_mwh_value(v),
         "extra_rows_fn": None,
         "default_opacity": 0.7,
         "location_row_display": "none",
@@ -343,7 +356,7 @@ if "app_initialized" not in st.session_state:
 
 # ========== Streamlit pagina setup ==========
 st.set_page_config(page_title="Friese Warmtevraagkaart", layout="wide")
-st.markdown('<h1 style="font-size: 35px;">Friese potentiekaart</h1>', unsafe_allow_html=True)
+st.markdown('<h1 style="font-size: 35px;">Friese Warmtepotentiekaart</h1>', unsafe_allow_html=True)
 st.markdown(
     """
     <p style="font-size: 16px; margin-top: -10px;">
@@ -1254,6 +1267,9 @@ if st.session_state.show_map:
             (warmtenet_meta or {}).get("type_by_key", {}),
             ui.get("warmtenet_type_selectie", []),
             opacity=float(ui.get("warmtenet_opacity", (warmtenet_meta or {}).get("default_opacity", 0.85))),
+            show_lines=bool(ui.get("warmtenet_show_lines", True)),
+            show_sources=bool(ui.get("warmtenet_show_sources", True)),
+            show_objects=bool(ui.get("warmtenet_show_objects", True)),
         )
 
     # H3 hoofdlaag(en) per zoom

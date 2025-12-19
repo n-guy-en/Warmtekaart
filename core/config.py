@@ -141,8 +141,8 @@ LAYER_CFG = {
         "palette": "YlGnBu",
         "n_colors": 5,
         "alpha": 210,
-        "legend_title": "Waterlichamen potentie (kWh)",
-        "tooltip_unit": "kWh",
+        "legend_title": "Waterlichamen potentie (MWh)",
+        "tooltip_unit": "MWh",
         "line_color": [15, 70, 110, 140],
     },
     "buurt_potentie": {
