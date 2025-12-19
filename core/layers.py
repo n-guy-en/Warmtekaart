@@ -627,13 +627,18 @@ def create_warmtenet_layers(
     type_by_key: dict[str, str] | None = None,
     allowed_types: list[str] | None = None,
     opacity: float = 0.85,
+    show_lines: bool = True,
+    show_sources: bool = True,
+    show_objects: bool = True,
 ):
     """
     Bouw lagen voor warmtenet-model:
     - GeoJsonLayer voor leidingen (LineString)
-    - ScatterplotLayer voor bron-punten
+    - ScatterplotLayer voor bron-/object-punten
     """
     if not gjson or not isinstance(gjson, dict):
+        return []
+    if not (show_lines or show_sources or show_objects):
         return []
 
     def _line_hash(geom: dict) -> tuple:
@@ -676,6 +681,23 @@ def create_warmtenet_layers(
         prepared_props = _prepare_warmtenet_props(props, color=color, layer_label=layer_label)
 
         geom = feat.get("geometry") or {}
+        geom_type = geom.get("type")
+        layer_type = str(prepared_props.get("layer") or "").strip().lower()
+        if layer_type not in {"bron", "object", "leiding"}:
+            if geom_type == "LineString":
+                layer_type = "leiding"
+            elif props.get("bron_mwh_per_jaar") is not None or props.get("ingezet_mwh_per_jaar") is not None:
+                layer_type = "bron"
+            elif props.get("vraag_mwh_per_jaar") is not None:
+                layer_type = "object"
+        if geom_type == "LineString" and not show_lines:
+            continue
+        if geom_type == "Point":
+            if layer_type == "bron" and not show_sources:
+                continue
+            if layer_type == "object" and not show_objects:
+                continue
+        prepared_props["_layer_type"] = layer_type
         filtered_feats.append((prepared_props, geom, feat))
 
     # Bepaal overlap-telling voor leidingen (zelfde traject -> dikkere lijn)
@@ -688,7 +710,7 @@ def create_warmtenet_layers(
 
     for prepared_props, geom, _ in filtered_feats:
         geom_type = geom.get("type")
-        layer_type = str(prepared_props.get("layer") or "").strip().lower()
+        layer_type = str(prepared_props.get("_layer_type") or prepared_props.get("layer") or "").strip().lower()
         prepared_props["_geometry_type"] = str(geom_type or "").strip()
         point_radius = 12 if layer_type == "bron" else 6
         point_line_width = 3.0 if layer_type == "bron" else 2.2  # dikkere rand voor zichtbaarheid

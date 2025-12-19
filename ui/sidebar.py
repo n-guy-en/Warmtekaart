@@ -157,7 +157,7 @@ def _render_big_legend(current_threshold_display: float, heat_unit: str, *, dark
         legend_rows = [(_rgba_to_css(color), label) for color, label in zip(MWH_HA_COLORS, labels)]
         pot_label_value = current_threshold_display
         pot_label = f"Potentie grenswaarde: {format_dutch_number(pot_label_value, 0)} MWh/ha"
-        title = "Gemiddelde warmtevraag (MWh/ha)"
+        title = "Warmtevraag (MWh/ha)"
     else:
         legend_rows = [
             ("#4575b4", "< 10,0 kWh/m²"),
@@ -166,13 +166,12 @@ def _render_big_legend(current_threshold_display: float, heat_unit: str, *, dark
         ]
         pot_label_value = current_threshold_display
         pot_label = f"Potentie grenswaarde: {format_dutch_number(pot_label_value, 0)} kWh/m²"
-        title = "Gemiddelde warmtevraag (kWh/m²)"
+        title = "Warmtevraag (kWh/m²)"
 
     legend_html_rows = "".join(
         f"<div><span class='color-box' style='background-color: {color};'></span> {label}</div>"
         for color, label in legend_rows
     )
-
     legend_html = f"""
         <style>
             .legend {{
@@ -237,6 +236,7 @@ def build_sidebar(
     if "grenswaarde_input" in st.session_state and "grenswaarde_input_kwh" not in st.session_state:
         st.session_state["grenswaarde_input_kwh"] = st.session_state.get("grenswaarde_input", 100)
     st.session_state.setdefault("grenswaarde_input", 100)  # backward compat
+    st.session_state.setdefault("grenswaarde_input_mwhha", 5500)
     st.session_state.setdefault("participatie", 80)
     st.session_state.setdefault("LAYER_CFG", LAYER_CFG)
     st.session_state.setdefault("BASEMAP_CFG", BASEMAP_CFG)
@@ -321,30 +321,54 @@ def build_sidebar(
                 index=heat_unit_options.index(heat_unit_default),
                 horizontal=True,
                 key="heat_unit",
-                help="Kies of de kaart kleurt op warmtevraag per hectare grondoppervlakte (MWh/ha) of op gemiddeld verbruik per m² gebruiksoppervlakte (kWh/m²).",
+                help="Kies of de kaart kleurt op warmtevraag per hectare grondoppervlakte (MWh/ha) of op warmtevraag per m² gebruiksoppervlakte (kWh/m²).",
             )
             ui["heat_unit"] = heat_unit
 
             if heat_unit == "MWh/ha":
-                default_mwhha = int(float(st.session_state.get("grenswaarde_input_mwhha", 5000)))
-                display_val = format_dutch_number(default_mwhha, 0)
+                min_threshold_display = 5001
+                default_mwhha = int(float(st.session_state.get("grenswaarde_input_mwhha", 5500)))
+                input_key = "grenswaarde_input_mwhha_str"
+                if input_key not in st.session_state:
+                    st.session_state[input_key] = format_dutch_number(default_mwhha, 0)
+                else:
+                    parsed_val = parse_dutch_int(st.session_state.get(input_key, ""), fallback=default_mwhha)
+                    if parsed_val < min_threshold_display:
+                        parsed_val = min_threshold_display
+                    formatted_val = format_dutch_number(parsed_val, 0)
+                    if st.session_state[input_key] != formatted_val:
+                        st.session_state[input_key] = formatted_val
+                display_val = st.session_state[input_key]
                 threshold_str = st.text_input(
                     "Stel de minimale grenswaarde (threshold) in per MWh/ha:",
                     value=display_val,
-                    key="grenswaarde_input_mwhha_str",
+                    key=input_key,
                 )
-                threshold_display = parse_dutch_int(threshold_str or "", fallback=default_mwhha)
+                threshold_display_raw = parse_dutch_int(threshold_str or "", fallback=default_mwhha)
+                threshold_display = max(threshold_display_raw, min_threshold_display)
                 st.session_state["grenswaarde_input_mwhha"] = threshold_display
                 threshold_kwh = float(threshold_display) / 10.0
             else:
+                min_threshold_display = 50
                 default_kwh = int(float(st.session_state.get("grenswaarde_input_kwh", 100)))
-                display_val = format_dutch_number(default_kwh, 0)
+                input_key = "grenswaarde_input_kwh_str"
+                if input_key not in st.session_state:
+                    st.session_state[input_key] = format_dutch_number(default_kwh, 0)
+                else:
+                    parsed_val = parse_dutch_int(st.session_state.get(input_key, ""), fallback=default_kwh)
+                    if parsed_val < min_threshold_display:
+                        parsed_val = min_threshold_display
+                    formatted_val = format_dutch_number(parsed_val, 0)
+                    if st.session_state[input_key] != formatted_val:
+                        st.session_state[input_key] = formatted_val
+                display_val = st.session_state[input_key]
                 threshold_str = st.text_input(
                     "Stel de minimale grenswaarde (threshold) in per kWh/m²:",
                     value=display_val,
-                    key="grenswaarde_input_kwh_str",
+                    key=input_key,
                 )
-                threshold_display = parse_dutch_int(threshold_str or "", fallback=default_kwh)
+                threshold_display_raw = parse_dutch_int(threshold_str or "", fallback=default_kwh)
+                threshold_display = max(threshold_display_raw, min_threshold_display)
                 st.session_state["grenswaarde_input_kwh"] = threshold_display
                 threshold_kwh = float(threshold_display)
 
@@ -380,12 +404,35 @@ def build_sidebar(
             )
             ui["show_warmtenet_model"] = show_warmtenet
             if show_warmtenet:
+                default_show_sources = bool(st.session_state.get("warmtenet_show_sources", True))
+                default_show_objects = bool(st.session_state.get("warmtenet_show_objects", True))
+                default_show_lines = bool(st.session_state.get("warmtenet_show_lines", True))
+                st.markdown("**Onderdelen**")
+                show_sources = st.checkbox(
+                    "Bronnen",
+                    value=default_show_sources,
+                    key="warmtenet_show_sources",
+                )
+                show_objects = st.checkbox(
+                    "Objecten",
+                    value=default_show_objects,
+                    key="warmtenet_show_objects",
+                )
+                show_lines = st.checkbox(
+                    "Leidingen",
+                    value=default_show_lines,
+                    key="warmtenet_show_lines",
+                )
+                ui["warmtenet_show_sources"] = show_sources
+                ui["warmtenet_show_objects"] = show_objects
+                ui["warmtenet_show_lines"] = show_lines
+
                 model_wp_options = warmtenet_meta.get("woonplaatsen", []) if warmtenet_meta else []
                 prev_model_wp = [w for w in st.session_state.get("warmtenet_wp_selectie", []) if w in model_wp_options]
                 base_default = [w for w in st.session_state.get("woonplaats_selectie", []) if w in model_wp_options]
                 default_model_wp = prev_model_wp or base_default or model_wp_options
                 model_wp_selectie = st.multiselect(
-                    "Filter warmtenet op woonplaats:",
+                    "Filter op woonplaats",
                     options=model_wp_options,
                     default=default_model_wp,
                 )
@@ -453,15 +500,19 @@ def build_sidebar(
                             seen_wp.append(wp)
                         grouped_colors.append(color)
                         grouped_labels.append(label)
-                    header_html = (
-                        "<span style='font-size:12px; display:block;'>"
-                        "<span style='color:#111;'>&#9679;</span> bron<br>"
-                        "<span style='color:#111;'>&#9675;</span> object<br>"
-                        "<span style='color:#444;'>───</span> leiding"
-                        "</span>"
-                    )
+                    legend_parts = []
+                    if ui.get("warmtenet_show_sources", True):
+                        legend_parts.append("<span style='color:#111;'>&#9679;</span> bron")
+                    if ui.get("warmtenet_show_objects", True):
+                        legend_parts.append("<span style='color:#111;'>&#9675;</span> object")
+                    if ui.get("warmtenet_show_lines", True):
+                        legend_parts.append("<span style='color:#444;'>───</span> leiding")
+                    header_html = "<br>".join(legend_parts)
+                    legend_title = LAYER_CFG["warmtenet_model"]["legend_title"]
+                    if header_html:
+                        legend_title = f"{legend_title}<br><span style='font-size:12px; display:block;'>{header_html}</span>"
                     render_mini_legend(
-                        f"{LAYER_CFG['warmtenet_model']['legend_title']}<br><span style='font-size:12px;'>{header_html}</span>",
+                        legend_title,
                         grouped_colors,
                         grouped_labels,
                         dark_mode=dark_mode,
@@ -472,6 +523,9 @@ def build_sidebar(
             else:
                 ui["warmtenet_opacity"] = st.session_state.setdefault("warmtenet_opacity", default_warmtenet_opacity)
                 ui["warmtenet_selected_keys"] = st.session_state.setdefault("warmtenet_selected_keys", [])
+                ui["warmtenet_show_sources"] = st.session_state.setdefault("warmtenet_show_sources", True)
+                ui["warmtenet_show_objects"] = st.session_state.setdefault("warmtenet_show_objects", True)
+                ui["warmtenet_show_lines"] = st.session_state.setdefault("warmtenet_show_lines", True)
 
             # Potentielagen
             st.subheader("Aquathermie potentielagen EXTRAQT")

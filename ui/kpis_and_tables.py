@@ -46,7 +46,7 @@ def render_kpis(df_filtered: pd.DataFrame, participatie_pct: int):
     Toont 4 KPI-kaarten:
     - Totaal aantal panden
     - Deelnamegraad (panden)
-    - Totale Heat Demand (MWh)
+    - Totale Warmtevraag (MWh)
     - Deelnamegraad (MWh)
     """
     _kpi_css()
@@ -68,7 +68,7 @@ def render_kpis(df_filtered: pd.DataFrame, participatie_pct: int):
     with c2:
         _kpi_card(f"Deelnamegraad: {pct}%", _nl_int(panden_part), "Aantal panden")
     with c3:
-        _kpi_card("Totale Heat Demand", _nl_int(totaal_mwh), "MWh")
+        _kpi_card("Totale Warmtevraag", _nl_int(totaal_mwh), "MWh")
     with c4:
         _kpi_card(f"Deelnamegraad: {pct}%", _nl_int(mwh_part), "MWh")
 
