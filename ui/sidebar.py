@@ -329,19 +329,18 @@ def build_sidebar(
                 min_threshold_display = 5001
                 default_mwhha = int(float(st.session_state.get("grenswaarde_input_mwhha", 5500)))
                 input_key = "grenswaarde_input_mwhha_str"
-                if input_key not in st.session_state:
+                raw_val = st.session_state.get(input_key)
+                if raw_val is None:
                     st.session_state[input_key] = format_dutch_number(default_mwhha, 0)
                 else:
-                    parsed_val = parse_dutch_int(st.session_state.get(input_key, ""), fallback=default_mwhha)
+                    parsed_val = parse_dutch_int(str(raw_val), fallback=default_mwhha)
                     if parsed_val < min_threshold_display:
                         parsed_val = min_threshold_display
                     formatted_val = format_dutch_number(parsed_val, 0)
-                    if st.session_state[input_key] != formatted_val:
+                    if str(raw_val) != formatted_val:
                         st.session_state[input_key] = formatted_val
-                display_val = st.session_state[input_key]
                 threshold_str = st.text_input(
                     "Stel de minimale grenswaarde (threshold) in per MWh/ha:",
-                    value=display_val,
                     key=input_key,
                 )
                 threshold_display_raw = parse_dutch_int(threshold_str or "", fallback=default_mwhha)
@@ -352,19 +351,18 @@ def build_sidebar(
                 min_threshold_display = 50
                 default_kwh = int(float(st.session_state.get("grenswaarde_input_kwh", 100)))
                 input_key = "grenswaarde_input_kwh_str"
-                if input_key not in st.session_state:
+                raw_val = st.session_state.get(input_key)
+                if raw_val is None:
                     st.session_state[input_key] = format_dutch_number(default_kwh, 0)
                 else:
-                    parsed_val = parse_dutch_int(st.session_state.get(input_key, ""), fallback=default_kwh)
+                    parsed_val = parse_dutch_int(str(raw_val), fallback=default_kwh)
                     if parsed_val < min_threshold_display:
                         parsed_val = min_threshold_display
                     formatted_val = format_dutch_number(parsed_val, 0)
-                    if st.session_state[input_key] != formatted_val:
+                    if str(raw_val) != formatted_val:
                         st.session_state[input_key] = formatted_val
-                display_val = st.session_state[input_key]
                 threshold_str = st.text_input(
                     "Stel de minimale grenswaarde (threshold) in per kWh/m²:",
-                    value=display_val,
                     key=input_key,
                 )
                 threshold_display_raw = parse_dutch_int(threshold_str or "", fallback=default_kwh)
